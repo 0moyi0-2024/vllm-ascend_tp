@@ -1289,40 +1289,11 @@ class AscendAttentionBackendImpl(AttentionImpl):
     ):
         num_tokens = query.shape[0]
         if (
-            self.kv_sharing_target_layer_name is not None
-            and key is not None
-            and value is not None
-            and query.shape[0] == key.shape[0]
-            and attn_metadata.attn_state in (AscendAttentionState.PrefillNoCache, AscendAttentionState.ChunkedPrefill)
-        ):
-            shared_key, shared_value = self._get_current_token_shared_kv(attn_metadata)
-            if shared_key is not None and shared_value is not None:
-                return self._forward_large_head_prefill_attention(
-                    query,
-                    shared_key,
-                    shared_value,
-                    attn_metadata,
-                    output,
-                )
-
-        if (
             attn_metadata.attn_state == AscendAttentionState.DecodeOnly
+            and using_paged_attention(num_tokens, self.vllm_config)
             and self.sliding_window is None
-            and (
-                using_paged_attention(num_tokens, self.vllm_config) or self._should_use_large_head_attention_fallback()
-            )
         ):
             output = self.forward_paged_attention(query, attn_metadata, output)
-        elif (
-            not _EXTRA_CTX.capturing
-            and self._should_use_large_head_attention_fallback()
-            and self.kv_sharing_target_layer_name is None
-            and key is not None
-            and value is not None
-            and query.shape[0] == key.shape[0]
-            and attn_metadata.attn_state in (AscendAttentionState.PrefillNoCache, AscendAttentionState.ChunkedPrefill)
-        ):
-            output = self._forward_large_head_prefill_attention(query, key, value, attn_metadata, output)
         else:
             output = self.forward_fused_infer_attention(query, key, value, attn_metadata, output, kv_cache)
 
