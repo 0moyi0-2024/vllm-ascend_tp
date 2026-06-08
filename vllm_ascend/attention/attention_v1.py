@@ -299,8 +299,10 @@ class AscendAttentionMetadataBuilder(AttentionMetadataBuilder[AscendMetadata]):
         vllm_config: VllmConfig,
         kv_cache_spec: AttentionSpec,
     ) -> AttentionCGSupport:
-        # Explicit override in case the underlying builder specialized this getter.
-        # @override omitted only because of mypy limitation due to type variable.
+        from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
+
+        if get_ascend_device_type() == AscendDeviceType.A5:
+            return AttentionCGSupport.NEVER
         return AttentionCGSupport.ALWAYS
 
     def reorder_batch(self, input_batch, scheduler_output: "SchedulerOutput") -> bool:
@@ -1204,6 +1206,54 @@ class AscendAttentionBackendImpl(AttentionImpl):
         unsupported_fia_tnd_head_size = self.head_size not in FIA_TND_SUPPORTED_HEAD_SIZES
         return self.sinks is None and unsupported_fia_tnd_head_size
 
+    def _forward_decode_via_fusion_attention(
+        self,
+        query: torch.Tensor,
+        attn_metadata: AscendMetadata,
+        output: torch.Tensor,
+    ) -> torch.Tensor:
+        from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
+
+        if get_ascend_device_type() != AscendDeviceType.A5:
+            return self.forward_paged_attention(query, attn_metadata, output)
+
+        dense_key, dense_value = self._gather_paged_kv_to_dense(
+            self.key_cache,
+            self.value_cache,
+            attn_metadata.block_tables,
+            attn_metadata.seq_lens_list,
+        )
+
+        num_tokens = query.shape[0]
+        actual_seq_lengths_kv = torch.tensor(attn_metadata.seq_lens_list, dtype=torch.int32).cumsum(0).tolist()
+        actual_seq_lengths_q = [1] * len(attn_metadata.seq_lens_list)
+        actual_seq_lengths_q_cumsum = torch.tensor(actual_seq_lengths_q, dtype=torch.int32).cumsum(0).tolist()
+
+        sparse_mode = 4 if self.sliding_window is not None else 3 if attn_metadata.causal else 0
+        pre_tokens = self.sliding_window if self.sliding_window is not None else SWA_INT_MAX
+        next_tokens = 0
+
+        attn_mask = attn_metadata.attn_mask
+        if attn_mask is not None and attn_mask.dtype not in (torch.bool, torch.uint8):
+            attn_mask = attn_mask.bool()
+
+        attn_output = torch_npu.npu_fusion_attention(
+            query=query[:num_tokens],
+            key=dense_key,
+            value=dense_value,
+            head_num=self.num_heads,
+            input_layout="TND",
+            atten_mask=attn_mask,
+            scale=self.scale,
+            pre_tockens=pre_tokens,
+            next_tockens=next_tokens,
+            actual_seq_qlen=actual_seq_lengths_q_cumsum,
+            actual_seq_kvlen=actual_seq_lengths_kv,
+            sparse_mode=sparse_mode,
+        )[0]
+        output[:num_tokens] = attn_output[:num_tokens]
+        return output
+
     def _get_current_token_shared_kv(
         self,
         attn_metadata: AscendMetadata,
@@ -1287,13 +1337,48 @@ class AscendAttentionBackendImpl(AttentionImpl):
         attn_metadata: AscendMetadata,
         output: torch.Tensor,
     ):
+        from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
+
         num_tokens = query.shape[0]
+        is_a5 = get_ascend_device_type() == AscendDeviceType.A5
+        is_large_head = self._should_use_large_head_attention_fallback()
+
         if (
-            attn_metadata.attn_state == AscendAttentionState.DecodeOnly
-            and using_paged_attention(num_tokens, self.vllm_config)
-            and self.sliding_window is None
+            self.kv_sharing_target_layer_name is not None
+            and key is not None
+            and value is not None
+            and query.shape[0] == key.shape[0]
+            and attn_metadata.attn_state in (AscendAttentionState.PrefillNoCache, AscendAttentionState.ChunkedPrefill)
         ):
-            output = self.forward_paged_attention(query, attn_metadata, output)
+            shared_key, shared_value = self._get_current_token_shared_kv(attn_metadata)
+            if shared_key is not None and shared_value is not None:
+                return self._forward_large_head_prefill_attention(
+                    query,
+                    shared_key,
+                    shared_value,
+                    attn_metadata,
+                    output,
+                )
+
+        if attn_metadata.attn_state == AscendAttentionState.DecodeOnly:
+            if is_a5:
+                output = self._forward_decode_via_fusion_attention(query, attn_metadata, output)
+            elif using_paged_attention(num_tokens, self.vllm_config) and self.sliding_window is None:
+                output = self.forward_paged_attention(query, attn_metadata, output)
+            elif is_large_head:
+                output = self.forward_paged_attention(query, attn_metadata, output)
+            else:
+                output = self.forward_fused_infer_attention(query, key, value, attn_metadata, output, kv_cache)
+        elif (
+            not _EXTRA_CTX.capturing
+            and is_large_head
+            and self.kv_sharing_target_layer_name is None
+            and key is not None
+            and value is not None
+            and query.shape[0] == key.shape[0]
+            and attn_metadata.attn_state in (AscendAttentionState.PrefillNoCache, AscendAttentionState.ChunkedPrefill)
+        ):
+            output = self._forward_large_head_prefill_attention(query, key, value, attn_metadata, output)
         else:
             output = self.forward_fused_infer_attention(query, key, value, attn_metadata, output, kv_cache)
 
