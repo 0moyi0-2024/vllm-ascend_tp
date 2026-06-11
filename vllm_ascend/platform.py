@@ -567,7 +567,8 @@ class NPUPlatform(Platform):
 
         # Activate custom ops for v1, except on 310P
         if get_ascend_device_type() != AscendDeviceType._310P:
-            compilation_config.custom_ops = ["all"]
+            if compilation_config.custom_ops != ["none"]:
+                compilation_config.custom_ops = ["all"]
 
         if ascend_config.enable_balance_scheduling:
             kv_transfer_config = vllm_config.kv_transfer_config

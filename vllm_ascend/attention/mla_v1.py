@@ -812,11 +812,12 @@ class AscendMLAImpl(MLAAttentionImpl):
             attn_keys = attn_keys * (len(graph_params.attn_params[num_tokens]) // num_layers)
         attn_count = 0
         with torch.npu.stream(update_stream):
-            for key, param, handle, event in zip(
+            for key, param, handle, event, ws in zip(
                 attn_keys,
                 graph_params.attn_params[num_tokens],
                 graph_params.handles[num_tokens],
                 graph_params.events[num_tokens],
+                graph_params.workspaces[num_tokens],
             ):
                 (
                     q_nope,
@@ -889,7 +890,7 @@ class AscendMLAImpl(MLAAttentionImpl):
                     block_size=block_size,
                     actual_seq_kvlen=seq_lens_list,
                     actual_seq_qlen=actual_seq_lengths,
-                    workspace=graph_params.workspaces.get(num_tokens),
+                    workspace=ws,
                     out=[attn_output, softmax_lse],
                     **extra_args,
                 )
@@ -1539,7 +1540,14 @@ class AscendMLAImpl(MLAAttentionImpl):
             event.reset(stream)
             graph_params.events[num_tokens].append(event)
 
-            workspace = graph_params.workspaces.get(num_tokens)
+            workspace = torch_npu._npu_fused_infer_attention_score_v2_get_max_workspace(
+                q_nope, k_nope, k_nope, **common_kwargs
+            )
+            if _EXTRA_CTX.is_draft_model:
+                update_draft_graph_params_workspaces(num_tokens, workspace)
+            else:
+                update_graph_params_workspaces(num_tokens, workspace)
+
             attn_output = torch.empty(attn_output_shape, dtype=q_pe.dtype, device=q_pe.device)
             softmax_lse = torch.empty(num_tokens, dtype=q_pe.dtype, device=q_pe.device)
             attn_params = (
@@ -1567,15 +1575,6 @@ class AscendMLAImpl(MLAAttentionImpl):
                 )  # type: ignore
             else:
                 attn_params = attn_params + (None, None)  # type: ignore
-
-            if workspace is None:
-                workspace = torch_npu._npu_fused_infer_attention_score_v2_get_max_workspace(
-                    q_nope, k_nope, k_nope, **common_kwargs
-                )
-                if _EXTRA_CTX.is_draft_model:
-                    update_draft_graph_params_workspaces(num_tokens, workspace)
-                else:
-                    update_graph_params_workspaces(num_tokens, workspace)
 
             graph_params.attn_params[num_tokens].append(attn_params)
 

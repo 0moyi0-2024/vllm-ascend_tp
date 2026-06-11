@@ -265,9 +265,7 @@ def weak_ref_workspaces(params):
     if params is None:
         return
     for num_tokens in params.workspaces:
-        if params.workspaces[num_tokens] is None:
-            continue
-        params.workspaces[num_tokens] = weak_ref_tensors(params.workspaces[num_tokens])
+        params.workspaces[num_tokens] = [weak_ref_tensors(ws) for ws in params.workspaces[num_tokens]]
 
 
 def update_full_graph_params(
@@ -308,7 +306,7 @@ def update_full_graph_params(
 @dataclass
 class GraphParams:
     events: dict[int, list[torch.npu.ExternalEvent]]
-    workspaces: dict[int, torch.Tensor]
+    workspaces: dict[int, list[torch.Tensor]]
     handles: dict[int, list[torch_npu._C._NPUTaskGroupHandle]]
     attn_params: dict[int, list[tuple]]
     conv1d_params: dict[int, list[tuple]]  # for causal conv1d params
@@ -332,7 +330,7 @@ def set_graph_params(aclgraph_capture_sizes: list[int]):
         raise ValueError("Graph parameters have already been set!")
     _graph_params = GraphParams(
         {size: [] for size in aclgraph_capture_sizes},
-        {size: None for size in aclgraph_capture_sizes},
+        {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
@@ -344,7 +342,7 @@ def set_graph_params(aclgraph_capture_sizes: list[int]):
 def update_graph_params_workspaces(num_tokens: int, workspace: torch.Tensor):
     global _graph_params
     if _graph_params is not None:
-        _graph_params.workspaces[num_tokens] = workspace
+        _graph_params.workspaces[num_tokens].append(workspace)
 
 
 def get_graph_params():
@@ -360,7 +358,7 @@ def set_draft_graph_params(aclgraph_capture_sizes: list[int]):
         raise ValueError("DraftGraph parameters have already been set!")
     _draft_graph_params = GraphParams(
         {size: [] for size in aclgraph_capture_sizes},
-        {size: None for size in aclgraph_capture_sizes},
+        {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
@@ -372,7 +370,7 @@ def set_draft_graph_params(aclgraph_capture_sizes: list[int]):
 def update_draft_graph_params_workspaces(num_tokens: int, workspace: Any):
     global _draft_graph_params
     if _draft_graph_params is not None:
-        _draft_graph_params.workspaces[num_tokens] = workspace
+        _draft_graph_params.workspaces[num_tokens].append(workspace)
 
 
 def get_draft_graph_params():
@@ -388,7 +386,7 @@ def set_draft_graph_prefill_params(aclgraph_capture_sizes: list[int]):
         raise ValueError("DraftGraph preill parameters have already been set!")
     _draft_graph_prefill_params = GraphParams(
         {size: [] for size in aclgraph_capture_sizes},
-        {size: None for size in aclgraph_capture_sizes},
+        {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
         {size: [] for size in aclgraph_capture_sizes},
@@ -400,7 +398,7 @@ def set_draft_graph_prefill_params(aclgraph_capture_sizes: list[int]):
 def update_draft_graph_prefill_params_workspaces(num_tokens: int, workspace: Any):
     global _draft_graph_prefill_params
     if _draft_graph_prefill_params is not None:
-        _draft_graph_prefill_params.workspaces[num_tokens] = workspace
+        _draft_graph_prefill_params.workspaces[num_tokens].append(workspace)
 
 
 def get_draft_graph_prefill_params():

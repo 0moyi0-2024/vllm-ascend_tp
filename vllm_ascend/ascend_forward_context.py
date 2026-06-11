@@ -306,18 +306,7 @@ def select_moe_comm_method(num_tokens: int, vllm_config: VllmConfig, is_draft_mo
     elif soc_version in {AscendDeviceType._310P}:
         moe_comm_type = MoECommType.ALLGATHER
     elif soc_version in {AscendDeviceType.A5}:
-        num_experts_per_tok = getattr(
-            vllm_config.model_config.hf_text_config,
-            "num_experts_per_tok",
-            getattr(vllm_config.model_config.hf_text_config, "top_k_experts", 1),
-        )
-        world_size = vllm_config.parallel_config.world_size_across_dp
-        if num_tokens <= mc2_tokens_capacity and world_size > 1:
-            moe_comm_type = MoECommType.MC2
-        elif world_size <= num_experts_per_tok:
-            moe_comm_type = MoECommType.ALLGATHER
-        else:
-            moe_comm_type = MoECommType.ALLTOALL
+        moe_comm_type = MoECommType.ALLGATHER
     else:
         raise ValueError(f"Unsupported soc_version: {soc_version}")
     return moe_comm_type

@@ -329,11 +329,12 @@ class AscendMlaCPImpl(AscendMLAImpl):
             attn_keys = attn_keys * (len(graph_params.attn_params[num_tokens]) // num_layers)
         attn_count = 0
         with torch.npu.stream(update_stream):
-            for key, param, handle, event in zip(
+            for key, param, handle, event, ws in zip(
                 attn_keys,
                 graph_params.attn_params[num_tokens],
                 graph_params.handles[num_tokens],
                 graph_params.events[num_tokens],
+                graph_params.workspaces[num_tokens],
             ):
                 (
                     q_nope,
@@ -391,7 +392,7 @@ class AscendMlaCPImpl(AscendMLAImpl):
                     block_size=block_size,
                     actual_seq_lengths_kv=actual_seq_lengths_kv,
                     actual_seq_lengths=actual_seq_lengths,
-                    workspace=graph_params.workspaces.get(num_tokens),
+                    workspace=ws,
                     out=[attn_output, softmax_lse],
                 )
                 torch.npu.graph_task_update_end(update_stream)
@@ -690,15 +691,13 @@ class AscendMlaCPImpl(AscendMLAImpl):
             event.wait(stream)
             event.reset(stream)
             graph_params.events[num_tokens].append(event)
-            workspace = graph_params.workspaces.get(num_tokens)
-            if workspace is None:
-                workspace = torch_npu._npu_fused_infer_attention_score_get_max_workspace(
-                    q_nope,
-                    k_nope,
-                    k_nope,
-                    **common_kwargs,
-                )
-                update_graph_params_workspaces(num_tokens, workspace)
+            workspace = torch_npu._npu_fused_infer_attention_score_get_max_workspace(
+                q_nope,
+                k_nope,
+                k_nope,
+                **common_kwargs,
+            )
+            update_graph_params_workspaces(num_tokens, workspace)
             attn_output = torch.empty_like(q_nope)
             if input_layout == "BSND":
                 num_decodes = attn_metadata.num_decodes

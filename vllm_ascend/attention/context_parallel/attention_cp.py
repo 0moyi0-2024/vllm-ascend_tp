@@ -337,11 +337,12 @@ class AscendAttentionCPImpl(AscendAttentionBackendImpl):
             attn_keys = attn_keys * (len(graph_params.attn_params[num_tokens]) // num_layers)
         attn_count = 0
         with torch.npu.stream(update_stream):
-            for key, param, handle, event in zip(
+            for key, param, handle, event, ws in zip(
                 attn_keys,
                 graph_params.attn_params[num_tokens],
                 graph_params.handles[num_tokens],
                 graph_params.events[num_tokens],
+                graph_params.workspaces[num_tokens],
             ):
                 (
                     q_nope,
@@ -411,7 +412,7 @@ class AscendAttentionCPImpl(AscendAttentionBackendImpl):
                     block_size=block_size,
                     actual_seq_lengths_kv=actual_seq_lengths_kv,
                     actual_seq_lengths=actual_seq_lengths_q,
-                    workspace=graph_params.workspaces.get(num_tokens),
+                    workspace=ws,
                     out=[attn_output, softmax_lse],
                 )
                 torch.npu.graph_task_update_end(update_stream)
@@ -624,15 +625,13 @@ class AscendAttentionCPImpl(AscendAttentionBackendImpl):
             event.reset(stream)
             graph_params.events[num_tokens].append(event)
 
-            workspace = graph_params.workspaces.get(num_tokens)
-            if workspace is None:
-                workspace = torch_npu._npu_fused_infer_attention_score_get_max_workspace(
-                    query, k_nope, value, **common_kwargs
-                )
-                if _EXTRA_CTX.is_draft_model:
-                    update_draft_graph_params_workspaces(num_tokens, workspace)
-                else:
-                    update_graph_params_workspaces(num_tokens, workspace)
+            workspace = torch_npu._npu_fused_infer_attention_score_get_max_workspace(
+                query, k_nope, value, **common_kwargs
+            )
+            if _EXTRA_CTX.is_draft_model:
+                update_draft_graph_params_workspaces(num_tokens, workspace)
+            else:
+                update_graph_params_workspaces(num_tokens, workspace)
             attn_out = torch.empty_like(query)
             if input_layerout == "TND":
                 attn_lse = torch.empty((num_tokens, num_heads, 1), dtype=torch.float, device=query.device)

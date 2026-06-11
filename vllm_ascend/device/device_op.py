@@ -763,14 +763,14 @@ class BaseDeviceAdaptor:
 class A5DeviceAdaptor(BaseDeviceAdaptor):
     @classmethod
     def reshape_and_cache(cls, key, value, key_cache, value_cache, slot_mapping):
-        torch_npu.npu_scatter_pa_kv_cache(
-            key=key.contiguous(),
-            value=value.contiguous(),
-            key_cache=key_cache,
-            value_cache=value_cache,
-            slot_mapping=slot_mapping.contiguous(),
-            cache_mode="Norm",
-        )
+        block_size = key_cache.shape[1]
+        slot_mapping_long = slot_mapping.long()
+        block_indices = slot_mapping_long // block_size
+        block_offsets = slot_mapping_long % block_size
+        key = key.contiguous()
+        value = value.contiguous()
+        key_cache[block_indices, block_offsets] = key
+        value_cache[block_indices, block_offsets] = value
 
     @staticmethod
     def npu_moe_init_routing(

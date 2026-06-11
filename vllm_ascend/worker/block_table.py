@@ -5,8 +5,50 @@ from vllm.utils.math_utils import cdiv
 from vllm.v1.attention.backends.utils import PAD_SLOT_ID
 from vllm.v1.kv_cache_interface import KVCacheGroupSpec, MambaSpec
 from vllm.v1.utils import CpuGpuBuffer
-from vllm.v1.worker.block_table import _compute_slot_mapping_kernel
 from vllm.v1.worker.cp_utils import get_total_cp_world_size
+
+
+def _compute_slot_mapping_pytorch(
+    num_tokens, max_num_tokens, query_start_loc, positions, block_table,
+    block_table_stride, block_size, slot_mapping,
+    TOTAL_CP_WORLD_SIZE, TOTAL_CP_RANK, CP_KV_CACHE_INTERLEAVE_SIZE,
+    PAD_ID, BLOCK_SIZE=1024,
+) -> None:
+    slot_mapping[:num_tokens] = PAD_ID
+    virtual_block_size = block_size * TOTAL_CP_WORLD_SIZE
+    num_reqs = query_start_loc.shape[0] - 1
+    for req_idx in range(num_reqs):
+        start_idx = query_start_loc[req_idx].item()
+        end_idx = query_start_loc[req_idx + 1].item()
+        if start_idx >= end_idx:
+            continue
+        req_positions = positions[start_idx:end_idx]
+        block_indices = req_positions // virtual_block_size
+        block_numbers = block_table[req_idx, block_indices.long()]
+        virtual_block_offsets = req_positions - block_indices.long() * virtual_block_size
+        if TOTAL_CP_WORLD_SIZE > 1:
+            is_local = (
+                (virtual_block_offsets // CP_KV_CACHE_INTERLEAVE_SIZE) % TOTAL_CP_WORLD_SIZE
+                == TOTAL_CP_RANK
+            )
+            local_block_offsets = (
+                virtual_block_offsets // (TOTAL_CP_WORLD_SIZE * CP_KV_CACHE_INTERLEAVE_SIZE)
+            ) * CP_KV_CACHE_INTERLEAVE_SIZE + (virtual_block_offsets % CP_KV_CACHE_INTERLEAVE_SIZE)
+            slot_ids = block_numbers * block_size + local_block_offsets
+            slot_ids = torch.where(is_local, slot_ids, PAD_ID)
+        else:
+            local_block_offsets = virtual_block_offsets % block_size
+            slot_ids = block_numbers * block_size + local_block_offsets
+        slot_mapping[start_idx:end_idx] = slot_ids.long()
+    slot_mapping[num_tokens:] = PAD_ID
+
+
+class _SlotMappingKernelWrapper:
+    def __getitem__(self, grid):
+        return _compute_slot_mapping_pytorch
+
+
+_compute_slot_mapping_kernel = _SlotMappingKernelWrapper()
 
 
 class BlockTable:
