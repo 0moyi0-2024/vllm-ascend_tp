@@ -227,3 +227,66 @@ Actions:
 1. Use deterministic request (`temperature=0`, bounded `max_tokens`).
 2. Verify endpoint (`/v1/chat/completions` vs `/v1/completions`) matches model template.
 3. Confirm non-empty output and HTTP 200 before success declaration.
+
+## Graph mode accuracy degradation on A5 (MoE models)
+
+Symptoms:
+
+- GPQA Diamond score drops in graph mode vs eager mode (e.g., 0.7273 → 0.5707, ~15.7% drop).
+- At `temperature=0.0`, graph mode systematically over-selects options C/D and under-selects B in 4-choice questions.
+- 49% of wrong answers mention the correct option text in reasoning but pick a different letter in the ANSWER line — this is **logits-level bias**, not reasoning-depth loss.
+- Occasional repetition/garbled output (2.5% of responses at temp=0.0, longest 13707 tokens).
+
+Root cause chain:
+
+```
+Cudagraph padding (5 tokens → 8) → padding tokens' router_logits join softmax
+  → npu_moe_init_routing internal permutation differs from eager
+  → real tokens' expert computation results subtly shifted
+  → logits at ANSWER token position biased: C/D ↑, B ↓
+  → model systematically over-selects C/D, under-selects B
+  → even when reasoning content mentions correct option, final letter is wrong
+  → GPQA score drops from 0.7273 to 0.5707
+```
+
+**Critical evidence**: In GPQA Diamond evaluation (198 questions), prediction letter distribution shows B under-selected by 14 (predicted 41 vs actual 55) and C/D over-selected by 15/13. **48.8% of wrong answers (42/86) explicitly mention the correct option in their reasoning but select a different letter in the ANSWER line**. Wrong answers have MORE avg completion_tokens (1359.7 vs 1247.2) — the model is NOT producing shorter responses, it produces verbose but less structured output. This proves the degradation is **logits-level ANSWER letter bias**, not shallow reasoning. Full data: `/home/tongpan/outputs/20260611_200627/predictions/`, analysis summary: `/home/tongpan/result.txt`, full report: `docs/gemma4-graph-mode-accuracy-analysis.md`, repro guide: `/home/tongpan/gemma4-a5-ascend-repro-guide.md` section 4.6.
+
+| File | Line | Issue |
+|------|------|-------|
+| `patch_cudagraph.py` | 15 | `num_tokens_padded = self._bs_to_padded_graph_size[num_tokens]` — pads real tokens to capture sizes |
+| `prepare_finalize.py` | 424-428 | ALLGATHER pads both `hidden_states` and `router_logits` — padding tokens produce routing weights |
+| `prepare_finalize.py` | 514 | `hidden_states[:self.num_tokens]` — finalize slices but init_routing permutation already different |
+| `ascend_forward_context.py` | 177-179 | `num_actual_tokens` defaults to padded `num_tokens` when not explicitly set |
+| `experts_selector.py` | 240-246 | TODO: bfloat16 topk not supported in "ge graph" NPU execution mode |
+| `moe_comm_method.py` | 195-201 | `npu_moe_finalize_routing` has known accuracy bug; workaround uses `npu_moe_token_unpermute` |
+
+A5-specific constraints:
+
+1. A5 attention declares `NEVER` for cudagraph support — decode runs eagerly within aclgraph wrapper (`acl_graph.py:157-164`), but `_EXTRA_CTX.capturing=True` changes code paths during capture.
+2. MC2/ALLTOALL MoE comm crash on A5 (error 561000), forcing ALLGATHER — padding contamination cannot be mitigated via `mc2_mask` (mc2_mask is MC2-specific).
+3. ALLGATHER path has no mechanism to exclude padding tokens from routing.
+
+Experimental evidence (temperature=0.0, Gemma4-26B-A4B-it on A5):
+
+| Test | Graph(8006) | Eager(8011) | Match? | Key Difference |
+|------|-------------|-------------|--------|----------------|
+| Maxwell equations MCQ | A (wrong), 448ct | D (correct), 919ct | **No** | Graph misses Faraday law change |
+| Thermodynamics MCQ | D (wrong), 1189ct | B (correct), 521ct | **No** | Graph over-selects D |
+| Cosmology MCQ | B (wrong), 518ct | C (correct), 385ct | **No** | Graph under-selects |
+| Organic chemistry MCQ | garbled, 6553ct | B (correct), 587ct | **No** | Repetition output |
+| Simple MCQs (5 questions) | All correct | All correct | Yes | No effect on simple questions |
+
+Diagnosis steps:
+
+1. **Compare same prompt at `temperature=0.0` on both modes** — if answers differ on multi-step questions, confirms logits-level ANSWER letter bias from MoE padding.
+2. **Check prediction letter distribution** — if B is systematically under-selected and C/D over-selected vs gold distribution, confirms logits shift pattern.
+3. **Check if wrong answers mention correct option in reasoning** — if >40% of wrong answers contain correct option text, confirms the issue is final letter selection, not reasoning depth.
+4. **Log `router_logits` shape** in ALLGATHER prepare step — if `router_logits` is padded to capture_size instead of real token count, confirms padding contamination.
+
+Mitigation options:
+
+1. **Short-term**: Use `--enforce-eager` for MoE models on A5 until ALLGATHER padding treatment is fixed.
+2. **Medium-term**: Zero out padding tokens' `router_logits` in ALLGATHER prepare before `npu_moe_init_routing` (`router_logits[num_tokens:, :] = 0.0`). Add `mc2_mask`-like mechanism to ALLGATHER path.
+3. **Long-term**: Fix `npu_moe_finalize_routing` accuracy bug. Upgrade CANN/torch-npu so MC2 works on A5. Fix bfloat16 topk in NPU "ge graph" mode.
+
+**Full analysis report**: See `docs/gemma4-graph-mode-accuracy-analysis.md`.
