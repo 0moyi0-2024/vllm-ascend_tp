@@ -150,6 +150,11 @@ def select_experts(
         topk_ids = torch.cat([topk_ids, pad_shared_expert_ids], dim=1)
         topk_weights = torch.cat([topk_weights, pad_shared_expert_weights], dim=1)
 
+    from vllm_ascend.ascend_forward_context import _EXTRA_CTX
+    num_actual_tokens = _EXTRA_CTX.num_actual_tokens
+    if num_actual_tokens is not None and num_actual_tokens < topk_weights.shape[0]:
+        topk_weights[num_actual_tokens:, :] = 0.0
+
     return topk_weights, topk_ids
 
 
