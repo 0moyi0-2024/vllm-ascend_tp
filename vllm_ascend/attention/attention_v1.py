@@ -59,6 +59,7 @@ from vllm_ascend.compilation.acl_graph import (
     get_graph_params,
     update_graph_params_workspaces,
 )
+from vllm_ascend.debug_utils import log_gemma4_graph_debug
 from vllm_ascend.device.device_op import DeviceOperator
 from vllm_ascend.ops.flashcomm2_oshard_manager import flashcomm2_oshard_manager
 from vllm_ascend.utils import weak_ref_tensors
@@ -1338,6 +1339,27 @@ class AscendAttentionBackendImpl(AttentionImpl):
         num_tokens = query.shape[0]
         if attn_metadata is None:
             return output.fill_(0)
+
+        log_gemma4_graph_debug(
+            "attention_forward",
+            "attention forward layer=%s state=%s capturing=%s q_shape=%s "
+            "k_shape=%s v_shape=%s output_shape=%s num_actual_tokens=%s "
+            "sliding_window=%s head_size=%s num_heads=%s num_kv_heads=%s "
+            "kv_sharing_target_layer_name=%s",
+            self._layer_name,
+            getattr(attn_metadata.attn_state, "name", attn_metadata.attn_state),
+            getattr(_EXTRA_CTX, "capturing", None),
+            tuple(query.shape) if query is not None else None,
+            tuple(key.shape) if key is not None else None,
+            tuple(value.shape) if value is not None else None,
+            tuple(output.shape) if output is not None else None,
+            getattr(attn_metadata, "num_actual_tokens", None),
+            self.sliding_window,
+            self.head_size,
+            self.num_heads,
+            self.num_kv_heads,
+            getattr(self, "kv_sharing_target_layer_name", None),
+        )
 
         # Initialize key_cache and value_cache from kv_cache if not already set.
         # This is needed for DecodeOnly mode where key/value are None but we still

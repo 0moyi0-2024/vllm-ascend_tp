@@ -31,6 +31,7 @@ from vllm.model_executor.layers.fused_moe.runner.moe_runner import MoERunner  # 
 
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX, MoECommType
+from vllm_ascend.debug_utils import log_gemma4_graph_debug
 from vllm_ascend.distributed.parallel_state import get_mc2_group
 from vllm_ascend.eplb.core.eplb_utils import init_eplb_config
 from vllm_ascend.flash_common3_context import get_flash_common3_context, set_flash_common3_context
@@ -100,6 +101,20 @@ def _maybe_mask_padded_moe_tokens(
         _EXTRA_CTX.moe_comm_type,
         getattr(_EXTRA_CTX, "num_actual_tokens", None),
         x.shape[0],
+    )
+    log_gemma4_graph_debug(
+        "moe_mask",
+        "moe mask layer=%s activation=%s capturing=%s moe_comm_type=%s "
+        "global_actual=%s local_total=%s mask_numel=%s x_shape=%s router_shape=%s",
+        layer_name,
+        activation,
+        getattr(_EXTRA_CTX, "capturing", None),
+        getattr(_EXTRA_CTX, "moe_comm_type", None),
+        getattr(_EXTRA_CTX, "num_actual_tokens", None),
+        x.shape[0],
+        active_mask.numel(),
+        tuple(x.shape),
+        tuple(router_logits.shape),
     )
     return (
         torch.where(mask[:, None], x, torch.zeros_like(x)),

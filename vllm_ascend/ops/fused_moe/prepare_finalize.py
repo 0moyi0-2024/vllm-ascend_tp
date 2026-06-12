@@ -31,6 +31,7 @@ from vllm.model_executor.layers.fused_moe import FusedMoEConfig
 
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX
+from vllm_ascend.debug_utils import log_gemma4_graph_debug
 from vllm_ascend.distributed.utils import fc3_all_gather_and_maybe_unpad_impl
 from vllm_ascend.ops.fused_moe.moe_runtime_args import MoEPrepareOutput
 from vllm_ascend.quantization.quant_type import QuantType
@@ -42,6 +43,13 @@ def _build_active_token_mask(num_tokens: int, device: torch.device) -> torch.Ten
     if num_actual_tokens is None or num_actual_tokens >= num_tokens:
         return None
     return torch.arange(num_tokens, device=device) < num_actual_tokens
+
+
+def _local_active_token_count(global_actual: int | None, local_start: int, local_total: int) -> int | None:
+    if global_actual is None:
+        return None
+    local_end = local_start + local_total
+    return max(0, min(global_actual, local_end) - local_start)
 
 
 class PrepareAndFinalize(ABC):
@@ -181,6 +189,24 @@ class PrepareAndFinalizeWithAll2All(PrepareAndFinalize):
                 if active_mask is not None:
                     active_mask = torch.tensor_split(active_mask, self.tp_size, dim=0)[self.tp_rank]
 
+        local_total = hidden_states.shape[0]
+        global_actual = getattr(_EXTRA_CTX, "num_actual_tokens", None)
+        local_active = _local_active_token_count(global_actual, self.tp_rank * local_total, local_total)
+        log_gemma4_graph_debug(
+            "moe_prepare_all2all",
+            "moe prepare all2all tp_rank=%s/%s global_actual=%s local_start=%s "
+            "local_active=%s local_total=%s mask_numel=%s replace_allreduce=%s shared_expert_dp=%s",
+            self.tp_rank,
+            self.tp_size,
+            global_actual,
+            self.tp_rank * local_total,
+            local_active,
+            local_total,
+            active_mask.numel() if active_mask is not None else None,
+            self.replace_allreduce,
+            self.enable_shared_expert_dp,
+        )
+
         return MoEPrepareOutput(
             hidden_states=hidden_states,
             router_logits=router_logits,
@@ -308,6 +334,32 @@ class PrepareAndFinalizeWithMC2(PrepareAndFinalizeWithAll2All):
                 split_router_logits = torch.tensor_split(router_logits, self.tp_size, dim=0)
                 hidden_states = split_hidden_states[self.tp_rank]
                 router_logits = split_router_logits[self.tp_rank]
+
+        local_total = hidden_states.shape[0]
+        global_actual = getattr(_EXTRA_CTX, "num_actual_tokens", None)
+        global_padded = getattr(_EXTRA_CTX, "padded_num_tokens", None)
+        if global_padded is not None and self.tp_size > 0:
+            slice_len = global_padded // self.tp_size
+            local_start = self.tp_rank * slice_len
+        else:
+            local_start = self.tp_rank * local_total
+        local_active = _local_active_token_count(global_actual, local_start, local_total)
+        log_gemma4_graph_debug(
+            "moe_prepare_mc2",
+            "moe prepare mc2 tp_rank=%s/%s global_actual=%s global_padded=%s "
+            "local_start=%s local_active=%s local_total=%s mask_numel=%s "
+            "replace_allreduce=%s shared_expert_dp=%s",
+            self.tp_rank,
+            self.tp_size,
+            global_actual,
+            global_padded,
+            local_start,
+            local_active,
+            local_total,
+            mc2_mask.numel() if mc2_mask is not None else None,
+            self.replace_allreduce,
+            self.enable_shared_expert_dp,
+        )
 
         return MoEPrepareOutput(
             hidden_states=hidden_states,

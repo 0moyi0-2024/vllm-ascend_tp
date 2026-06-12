@@ -21,6 +21,7 @@ from vllm.logger import logger
 from vllm.platforms import current_platform
 
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX
+from vllm_ascend.debug_utils import log_gemma4_graph_debug
 
 from ..utils import weak_ref_tensors
 
@@ -170,6 +171,17 @@ class ACLGraphWrapper:
         entry = self.concrete_aclgraph_entries[batch_descriptor]
 
         if entry.aclgraph is None:
+            log_gemma4_graph_debug(
+                "aclgraph_capture",
+                "aclgraph capture mode=%s batch=%s num_tokens=%s "
+                "num_actual_tokens=%s padded_num_tokens=%s moe_comm_type=%s",
+                self.runtime_mode.name,
+                entry.batch_descriptor,
+                getattr(forward_context, "num_tokens", None),
+                getattr(forward_context, "num_actual_tokens", None),
+                getattr(forward_context, "padded_num_tokens", None),
+                getattr(_EXTRA_CTX, "moe_comm_type", None),
+            )
             if self.aclgraph_options.debug_log_enable:
                 # Since we capture aclgraph for many different shapes and
                 # capturing is fast, we don't need to log it for every
@@ -244,6 +256,17 @@ class ACLGraphWrapper:
             )
 
         logger.info_once("Replaying aclgraph")
+        log_gemma4_graph_debug(
+            "aclgraph_replay",
+            "aclgraph replay mode=%s batch=%s num_tokens=%s "
+            "num_actual_tokens=%s padded_num_tokens=%s moe_comm_type=%s",
+            self.runtime_mode.name,
+            entry.batch_descriptor,
+            getattr(forward_context, "num_tokens", None),
+            getattr(forward_context, "num_actual_tokens", None),
+            getattr(forward_context, "padded_num_tokens", None),
+            getattr(_EXTRA_CTX, "moe_comm_type", None),
+        )
         # In async scheduling or multi-threaded (MT) scenarios, it is possible that
         # the CPU's record event (from update_attn_params) for the iteration i completes
         # before the grph replay of iteration i-1.
