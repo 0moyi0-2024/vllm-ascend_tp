@@ -80,6 +80,7 @@ from vllm.v1.outputs import (
 )
 from vllm.v1.worker.utils import select_common_block_size
 
+from vllm_ascend.debug_utils import env_flag_enabled, log_gemma4_graph_debug
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, vllm_version_is
 
 if vllm_version_is("0.21.0"):
@@ -194,6 +195,20 @@ PerLayerAttnMetadata: TypeAlias = list[AttnMetadataDict] | AttnMetadataDict
 SEQ_LEN_WITH_MAX_PA_WORKSPACE = 6144
 
 
+def _is_gemma4_model_config(model_config: Any) -> bool:
+    hf_config = getattr(model_config, "hf_config", None)
+    hf_text_config = getattr(model_config, "hf_text_config", None)
+    candidates: list[Any] = [
+        getattr(model_config, "architecture", None),
+        getattr(model_config, "model", None),
+        getattr(hf_config, "model_type", None),
+        getattr(hf_text_config, "model_type", None),
+    ]
+    candidates.extend(getattr(hf_config, "architectures", None) or [])
+    candidates.extend(getattr(hf_text_config, "architectures", None) or [])
+    return any("gemma4" in str(candidate).lower() for candidate in candidates if candidate is not None)
+
+
 @dataclass
 class GraphCaptureContext:
     stream: torch.npu.Stream
@@ -273,6 +288,8 @@ class NPUModelRunner(GPUModelRunner):
 
         with _torch_cuda_wrapper():
             super().__init__(vllm_config, device)
+
+        self.is_gemma4_model = _is_gemma4_model_config(self.model_config)
 
         # NOTE: For FULL mode we change +1 to +2 to reserve extra space for padding.
         # See _pad_query_start_loc_for_fia.
@@ -1905,6 +1922,33 @@ class NPUModelRunner(GPUModelRunner):
                 )
 
                 num_tokens_padded = batch_desc.num_tokens
+                if (
+                    env_flag_enabled("VLLM_ASCEND_GEMMA4_DISABLE_PADDED_DECODE_GRAPH", default=True)
+                    and self.is_gemma4_model
+                    and cudagraph_mode == CUDAGraphMode.FULL
+                    and num_tokens_unpadded < num_tokens_padded
+                    and num_tokens_across_dp is None
+                    and self.pcp_size == 1
+                ):
+                    logger.info_once(
+                        "Disabling Gemma4 FULL graph for padded decode batches "
+                        "(num_actual_tokens < num_tokens_padded). Set "
+                        "VLLM_ASCEND_GEMMA4_DISABLE_PADDED_DECODE_GRAPH=0 to disable this guard."
+                    )
+                    log_gemma4_graph_debug(
+                        "gemma4_padded_decode_fallback",
+                        "disable padded decode graph num_actual_tokens=%s "
+                        "num_tokens_padded=%s batch=%s mode=%s",
+                        num_tokens_unpadded,
+                        num_tokens_padded,
+                        batch_desc,
+                        cudagraph_mode,
+                    )
+                    cudagraph_mode = CUDAGraphMode.NONE
+                    batch_desc = BatchDescriptor(num_tokens_unpadded)
+                    num_tokens_padded = num_tokens_unpadded
+                    cudagraph_stats = None
+
                 num_reqs_padded = batch_desc.num_reqs if batch_desc.num_reqs is not None else num_reqs
                 ubatch_slices, ubatch_slices_padded = maybe_create_ubatch_slices(
                     should_ubatch,
@@ -2599,10 +2643,25 @@ class NPUModelRunner(GPUModelRunner):
             and model_inputs["input_ids"] is None
             and inputs_embeds is not None
         ):
-            # NPU graph compilation may still inspect input_ids shape even when
-            # the multimodal model consumes inputs_embeds. Keep a real tensor to
-            # avoid tracing None through the compiled language-model boundary.
+            # Keep graph-capture and real multimodal forwards on the same
+            # language-model boundary: some compiled paths still inspect
+            # input_ids shape even when inputs_embeds carries the tokens.
             model_inputs["input_ids"] = self.input_ids.gpu[:num_tokens_padded]
+        log_gemma4_graph_debug(
+            "model_forward",
+            "model forward runtime=%s batch=%s capturing=%s num_tokens_padded=%s "
+            "num_actual_tokens=%s input_ids_shape=%s positions_shape=%s "
+            "inputs_embeds_shape=%s supports_mm_inputs=%s",
+            getattr(forward_context.cudagraph_runtime_mode, "name", forward_context.cudagraph_runtime_mode),
+            getattr(forward_context, "batch_descriptor", None),
+            getattr(forward_context, "capturing", None),
+            num_tokens_padded,
+            getattr(forward_context, "num_actual_tokens", None),
+            tuple(model_inputs["input_ids"].shape) if model_inputs["input_ids"] is not None else None,
+            tuple(positions.shape) if positions is not None else None,
+            tuple(inputs_embeds.shape) if inputs_embeds is not None else None,
+            self.supports_mm_inputs,
+        )
         run_model = partial(self.model, **model_inputs)
 
         if self.enable_enpu:
@@ -3297,14 +3356,7 @@ class NPUModelRunner(GPUModelRunner):
         ):
             # Make sure padding doesn't exceed max_num_tokens
             assert num_tokens_padded <= self.max_num_tokens
-            model_kwargs = self._init_model_kwargs()
-            if self.supports_mm_inputs and not self.model_config.is_encoder_decoder:
-                input_ids, inputs_embeds = self._prepare_mm_inputs(num_tokens_padded)
-                model_kwargs = {
-                    **model_kwargs,
-                    **self._dummy_mm_kwargs(num_reqs),
-                }
-            elif self.enable_prompt_embeds:
+            if self.supports_mm_inputs and not self.model_config.is_encoder_decoder or self.enable_prompt_embeds:
                 input_ids = None
                 inputs_embeds = self.inputs_embeds.gpu[:num_tokens_padded]
             else:
@@ -3371,12 +3423,7 @@ class NPUModelRunner(GPUModelRunner):
                 input_ids=input_ids,
             ):
                 outputs = self._model_forward(
-                    num_tokens_padded,
-                    input_ids,
-                    positions,
-                    intermediate_tensors,
-                    inputs_embeds,
-                    **model_kwargs,
+                    num_tokens_padded, input_ids, positions, intermediate_tensors, inputs_embeds
                 )
             if self.use_aux_hidden_state_outputs:
                 hidden_states, _ = outputs
