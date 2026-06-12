@@ -37,6 +37,13 @@ from vllm_ascend.quantization.quant_type import QuantType
 from vllm_ascend.utils import enable_sp, enable_sp_by_pass, npu_stream_switch
 
 
+def _build_active_token_mask(num_tokens: int, device: torch.device) -> torch.Tensor | None:
+    num_actual_tokens = getattr(_EXTRA_CTX, "num_actual_tokens", None)
+    if num_actual_tokens is None or num_actual_tokens >= num_tokens:
+        return None
+    return torch.arange(num_tokens, device=device) < num_actual_tokens
+
+
 class PrepareAndFinalize(ABC):
     """
     Abstract base class for MoE (Mixture-of-Experts) tensor preparation and finalization
@@ -152,13 +159,17 @@ class PrepareAndFinalizeWithAll2All(PrepareAndFinalize):
         self.enable_shared_expert_dp = enable_shared_expert_dp
 
         padded_hidden_states_shape = hidden_states.shape
+        active_mask = None
         if not (self.replace_allreduce or self.enable_shared_expert_dp):
             self.num_tokens, _ = hidden_states.shape
+            active_mask = _build_active_token_mask(self.num_tokens, hidden_states.device)
             pad_size = self.tp_size - self.num_tokens  # Pad to TP size (cyclic)
 
             if pad_size > 0:
                 hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad_size))
                 router_logits = nn.functional.pad(router_logits, (0, 0, 0, pad_size))
+                if active_mask is not None:
+                    active_mask = nn.functional.pad(active_mask, (0, pad_size))
                 padded_hidden_states_shape = hidden_states.shape
 
             if self.tp_size > 1:
@@ -167,11 +178,13 @@ class PrepareAndFinalizeWithAll2All(PrepareAndFinalize):
 
                 hidden_states = split_hidden_states[self.tp_rank]
                 router_logits = split_router_logits[self.tp_rank]
+                if active_mask is not None:
+                    active_mask = torch.tensor_split(active_mask, self.tp_size, dim=0)[self.tp_rank]
 
         return MoEPrepareOutput(
             hidden_states=hidden_states,
             router_logits=router_logits,
-            mc2_mask=None,
+            mc2_mask=active_mask,
             padded_hidden_states_shape=padded_hidden_states_shape,
             pertoken_scale=None,
         )
@@ -269,10 +282,13 @@ class PrepareAndFinalizeWithMC2(PrepareAndFinalizeWithAll2All):
         self.replace_allreduce = replace_allreduce
         self.enable_shared_expert_dp = enable_shared_expert_dp
         mc2_mask = _EXTRA_CTX.mc2_mask
+        if mc2_mask is None:
+            mc2_mask = _build_active_token_mask(hidden_states.shape[0], hidden_states.device)
         if self.tp_size > 1:
             # Also slice mc2_mask
-            split_mc2_mask = torch.tensor_split(mc2_mask, self.tp_size, dim=0)
-            mc2_mask = split_mc2_mask[self.tp_rank]
+            if mc2_mask is not None:
+                split_mc2_mask = torch.tensor_split(mc2_mask, self.tp_size, dim=0)
+                mc2_mask = split_mc2_mask[self.tp_rank]
 
         padded_hidden_states_shape = hidden_states.shape
         if not self.replace_allreduce:
@@ -392,10 +408,11 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
         if self.multistream_overlap_gate:
             torch.npu.current_stream().wait_stream(PrepareAndFinalize.quant_stream)
 
+        active_mask = _build_active_token_mask(hidden_states.shape[0], hidden_states.device)
         return MoEPrepareOutput(
             hidden_states=hidden_states,
             router_logits=router_logits,
-            mc2_mask=None,
+            mc2_mask=active_mask,
             padded_hidden_states_shape=None,
             pertoken_scale=pertoken_scale,
         )
@@ -418,6 +435,7 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             MoEPrepareOutput with global tensors.
         """
         self.enable_shared_expert_dp = enable_shared_expert_dp
+        active_mask = _build_active_token_mask(hidden_states.shape[0], hidden_states.device)
         if self.moe_config.dp_size > 1:
             max_tokens_across_dp = _EXTRA_CTX.max_tokens_across_dp
 
@@ -426,10 +444,14 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             if pad_size > 0:
                 hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad_size))
                 router_logits = nn.functional.pad(router_logits, (0, 0, 0, pad_size))
+                if active_mask is not None:
+                    active_mask = nn.functional.pad(active_mask, (0, pad_size))
 
             # All-gather across DP group
             hidden_states = self.moe_config.dp_group.all_gather(hidden_states, 0)
             router_logits = self.moe_config.dp_group.all_gather(router_logits, 0)
+            if active_mask is not None:
+                active_mask = self.moe_config.dp_group.all_gather(active_mask, 0)
 
         if self.moe_config.pcp_size > 1:
             max_tokens_across_pcp = _EXTRA_CTX.max_tokens_across_pcp
@@ -439,6 +461,8 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             if pad_size > 0:
                 hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad_size))
                 router_logits = nn.functional.pad(router_logits, (0, 0, 0, pad_size))
+                if active_mask is not None:
+                    active_mask = nn.functional.pad(active_mask, (0, pad_size))
 
             hidden_states = get_pcp_group().all_gather(
                 hidden_states,
@@ -448,11 +472,13 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
                 router_logits,
                 dim=0,
             )
+            if active_mask is not None:
+                active_mask = get_pcp_group().all_gather(active_mask, dim=0)
 
         return MoEPrepareOutput(
             hidden_states=hidden_states,
             router_logits=router_logits,
-            mc2_mask=None,
+            mc2_mask=active_mask,
             padded_hidden_states_shape=None,
             pertoken_scale=None,
         )

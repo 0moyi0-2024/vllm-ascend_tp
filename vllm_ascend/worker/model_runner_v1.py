@@ -2594,6 +2594,15 @@ class NPUModelRunner(GPUModelRunner):
             "inputs_embeds": inputs_embeds,
             **model_kwargs,
         }
+        if (
+            self.supports_mm_inputs
+            and model_inputs["input_ids"] is None
+            and inputs_embeds is not None
+        ):
+            # Keep graph-capture and real multimodal forwards on the same
+            # language-model boundary: some compiled paths still inspect
+            # input_ids shape even when inputs_embeds carries the tokens.
+            model_inputs["input_ids"] = self.input_ids.gpu[:num_tokens_padded]
         run_model = partial(self.model, **model_inputs)
 
         if self.enable_enpu:

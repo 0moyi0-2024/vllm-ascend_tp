@@ -81,6 +81,47 @@ class FusedMoEEvents:
     swiglu_limit: float = 0.0
 
 
+def _maybe_mask_padded_moe_tokens(
+    x: torch.Tensor,
+    router_logits: torch.Tensor,
+    active_mask: torch.Tensor | None,
+    layer_name: str | None,
+    activation: str,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    if active_mask is None or active_mask.numel() != x.shape[0]:
+        return x, router_logits, None
+
+    mask = active_mask.to(device=x.device, dtype=torch.bool)
+    logger.info_once(
+        "Masking padded MoE tokens in graph mode: layer=%s activation=%s "
+        "moe_comm_type=%s num_actual_tokens=%s total=%s",
+        layer_name,
+        activation,
+        _EXTRA_CTX.moe_comm_type,
+        getattr(_EXTRA_CTX, "num_actual_tokens", None),
+        x.shape[0],
+    )
+    return (
+        torch.where(mask[:, None], x, torch.zeros_like(x)),
+        torch.where(mask[:, None], router_logits, torch.zeros_like(router_logits)),
+        mask,
+    )
+
+
+def _mask_inactive_topk(
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    active_mask: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if active_mask is None:
+        return topk_weights, topk_ids
+    mask = active_mask[:, None]
+    return (
+        torch.where(mask, topk_weights, torch.zeros_like(topk_weights)),
+        torch.where(mask, topk_ids, torch.zeros_like(topk_ids)),
+    )
+
+
 def mock_false():
     return False
 
@@ -162,6 +203,13 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             global_redundant_expert_num=global_redundant_expert_num,
             num_shared_experts=num_shared_experts,
         )
+        x, router_logits, active_mask = _maybe_mask_padded_moe_tokens(
+            x,
+            router_logits,
+            mc2_mask,
+            getattr(layer, "layer_name", None),
+            activation,
+        )
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
             router_logits=router_logits,
@@ -178,6 +226,7 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             tid2eid=self.tid2eid,
             input_ids=input_ids,
         )
+        topk_weights, topk_ids = _mask_inactive_topk(topk_weights, topk_ids, active_mask)
         if layer.vllm_config.model_config is not None and layer.vllm_config.model_config.enable_return_routed_experts:
             if vllm_version_is("0.21.0"):
                 # In 0.21.0, capturer is a process-wide singleton.
