@@ -24,9 +24,15 @@ from vllm.logger import logger
 _DEBUG_COUNTERS: defaultdict[str, int] = defaultdict(int)
 
 
-def gemma4_graph_debug_enabled() -> bool:
-    value = os.getenv("VLLM_ASCEND_GEMMA4_GRAPH_DEBUG", "")
+def env_flag_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
     return value.lower() not in ("", "0", "false", "off", "no")
+
+
+def gemma4_graph_debug_enabled() -> bool:
+    return env_flag_enabled("VLLM_ASCEND_GEMMA4_GRAPH_DEBUG")
 
 
 def gemma4_graph_debug_limit() -> int:
