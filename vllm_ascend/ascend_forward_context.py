@@ -1,5 +1,4 @@
 import math
-import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import Enum
@@ -9,11 +8,8 @@ import torch
 import vllm.envs as envs_vllm
 from vllm.config import CUDAGraphMode, VllmConfig
 from vllm.distributed import get_dp_group, get_ep_group, get_tensor_model_parallel_world_size
-from vllm.logger import init_logger
-
-logger = init_logger(__name__)
-
 from vllm.forward_context import BatchDescriptor, get_forward_context, set_forward_context
+
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.utils import (
     AscendDeviceType,
@@ -190,15 +186,6 @@ def set_ascend_forward_context(
                 mc2_mask[:num_actual_tokens] = True
                 mc2_mask[num_actual_tokens:] = False
                 forward_context.mc2_mask = mc2_mask
-                if os.environ.get("VLLM_ASCEND_GEMMA4_GRAPH_DEBUG"):
-                    mask_sum = mc2_mask.sum().item()
-                    mask_len = mc2_mask.shape[0]
-                    logger.info(
-                        "mc2_mask verify: num_actual=%d padded=%d mask_sum=%d mask_len=%d match=%s",
-                        num_actual_tokens, forward_context.padded_num_tokens,
-                        mask_sum, mask_len,
-                        mask_sum == num_actual_tokens,
-                    )
         try:
             yield
         finally:

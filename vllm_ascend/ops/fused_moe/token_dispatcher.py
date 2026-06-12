@@ -390,13 +390,6 @@ class TokenDispatcherWithAllGather(MoETokenDispatcher[MoEAllGatherCombineMetadat
             first_expert_idx = 0
             last_expert_idx = self.num_experts_local
             global_num_experts = self.num_experts_local
-
-            from vllm_ascend.ascend_forward_context import _EXTRA_CTX
-            mc2_mask = _EXTRA_CTX.mc2_mask
-            if mc2_mask is not None and mc2_mask.shape[0] >= topk_ids.shape[0]:
-                padding_mask = ~mc2_mask[:topk_ids.shape[0]]
-                topk_ids = topk_ids.masked_fill(padding_mask.unsqueeze(1), global_num_experts)
-
         sorted_hidden_states, expanded_row_idx, expert_tokens, dynamic_scale = DeviceOperator.npu_moe_init_routing(
             hidden_states,
             topk_ids,
@@ -424,23 +417,9 @@ class TokenDispatcherWithAllGather(MoETokenDispatcher[MoEAllGatherCombineMetadat
         )
 
     def token_combine(self, hidden_states, combine_metadata, bias=None):
-        expanded_row_idx = combine_metadata.expanded_row_idx
-        expanded_row_idx.masked_fill_(expanded_row_idx < 0, 0)
-
-        from vllm_ascend.ascend_forward_context import _EXTRA_CTX
-        mc2_mask = _EXTRA_CTX.mc2_mask
-        if mc2_mask is not None:
-            topk_weights = combine_metadata.topk_weights
-            num_tokens = topk_weights.shape[0]
-            top_k = topk_weights.shape[1]
-            if mc2_mask.shape[0] >= num_tokens and num_tokens * top_k >= expanded_row_idx.shape[0]:
-                padding_mask_expanded = (~mc2_mask[:num_tokens]).unsqueeze(1).expand(
-                    -1, top_k).reshape(-1)[:expanded_row_idx.shape[0]]
-                expanded_row_idx.masked_fill_(padding_mask_expanded, 0)
-
         final_hidden_states = torch_npu.npu_moe_token_unpermute(
             permuted_tokens=hidden_states,
-            sorted_indices=torch.abs(expanded_row_idx),
+            sorted_indices=torch.abs(combine_metadata.expanded_row_idx),
             probs=combine_metadata.topk_weights,
         )
         if len(combine_metadata.restore_shape) == 3:
