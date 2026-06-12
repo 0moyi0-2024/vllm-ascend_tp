@@ -393,9 +393,10 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             torch.npu.current_stream().wait_stream(PrepareAndFinalize.quant_stream)
 
         num_actual_tokens = _EXTRA_CTX.num_actual_tokens
-        if num_actual_tokens is not None and num_actual_tokens < router_logits.shape[0]:
-            router_logits = router_logits.clone()
-            router_logits[num_actual_tokens:, :] = torch.finfo(router_logits.dtype).min
+        mc2_mask = _EXTRA_CTX.mc2_mask
+        if mc2_mask is not None and mc2_mask.shape[0] >= router_logits.shape[0]:
+            padding_mask = ~mc2_mask[:router_logits.shape[0]]
+            router_logits = router_logits.masked_fill(padding_mask.unsqueeze(1), torch.finfo(router_logits.dtype).min)
 
         return MoEPrepareOutput(
             hidden_states=hidden_states,
@@ -423,7 +424,6 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             MoEPrepareOutput with global tensors.
         """
         self.enable_shared_expert_dp = enable_shared_expert_dp
-        num_actual_tokens = _EXTRA_CTX.num_actual_tokens
         if self.moe_config.dp_size > 1:
             max_tokens_across_dp = _EXTRA_CTX.max_tokens_across_dp
 
@@ -432,8 +432,6 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             if pad_size > 0:
                 hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad_size))
                 router_logits = nn.functional.pad(router_logits, (0, 0, 0, pad_size))
-                if num_actual_tokens is not None and num_actual_tokens < self.num_tokens:
-                    router_logits[num_actual_tokens:, :] = torch.finfo(router_logits.dtype).min
 
             # All-gather across DP group
             hidden_states = self.moe_config.dp_group.all_gather(hidden_states, 0)
@@ -459,11 +457,14 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
 
         # When dp_size==1 and pcp_size==1 (e.g., single-card cudagraph),
         # padding tokens from cudagraph capture sizes contaminate MoE routing.
-        # Mask their router_logits so softmax/sigmoid produces negligible weights.
+        # Use mc2_mask (cudagraph-compatible: updated before each replay)
+        # with masked_fill (tensor-level op captured by cudagraph) to mask
+        # padding tokens' router_logits so softmax/sigmoid produces near-zero weights.
         if self.moe_config.dp_size <= 1 and self.moe_config.pcp_size <= 1:
-            if num_actual_tokens is not None and num_actual_tokens < router_logits.shape[0]:
-                router_logits = router_logits.clone()
-                router_logits[num_actual_tokens:, :] = torch.finfo(router_logits.dtype).min
+            mc2_mask = _EXTRA_CTX.mc2_mask
+            if mc2_mask is not None and mc2_mask.shape[0] >= router_logits.shape[0]:
+                padding_mask = ~mc2_mask[:router_logits.shape[0]]
+                router_logits = router_logits.masked_fill(padding_mask.unsqueeze(1), torch.finfo(router_logits.dtype).min)
 
         return MoEPrepareOutput(
             hidden_states=hidden_states,

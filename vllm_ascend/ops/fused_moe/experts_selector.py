@@ -151,9 +151,10 @@ def select_experts(
         topk_weights = torch.cat([topk_weights, pad_shared_expert_weights], dim=1)
 
     from vllm_ascend.ascend_forward_context import _EXTRA_CTX
-    num_actual_tokens = _EXTRA_CTX.num_actual_tokens
-    if num_actual_tokens is not None and num_actual_tokens < topk_weights.shape[0]:
-        topk_weights[num_actual_tokens:, :] = 0.0
+    mc2_mask = _EXTRA_CTX.mc2_mask
+    if mc2_mask is not None and mc2_mask.shape[0] >= topk_weights.shape[0]:
+        padding_mask = ~mc2_mask[:topk_weights.shape[0]]
+        topk_weights = topk_weights.masked_fill(padding_mask.unsqueeze(1), 0.0)
 
     return topk_weights, topk_ids
 
