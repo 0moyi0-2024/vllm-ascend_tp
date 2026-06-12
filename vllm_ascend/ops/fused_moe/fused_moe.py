@@ -116,9 +116,10 @@ def _maybe_mask_padded_moe_tokens(
         tuple(x.shape),
         tuple(router_logits.shape),
     )
+    neg_inf_router_logits = torch.full_like(router_logits, float("-inf"))
     return (
         torch.where(mask[:, None], x, torch.zeros_like(x)),
-        torch.where(mask[:, None], router_logits, torch.zeros_like(router_logits)),
+        torch.where(mask[:, None], router_logits, neg_inf_router_logits),
         mask,
     )
 
