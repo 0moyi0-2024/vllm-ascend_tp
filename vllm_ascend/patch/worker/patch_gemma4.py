@@ -27,3 +27,6 @@ def apply_patch():
 
     original_forward = Gemma4DecoderLayer.forward
     Gemma4DecoderLayer.forward = _patched_gemma4_decoder_layer_forward(original_forward)
+
+
+apply_patch()
