@@ -80,7 +80,6 @@ from vllm.v1.outputs import (
 )
 from vllm.v1.worker.utils import select_common_block_size
 
-from vllm_ascend.debug_utils import env_flag_enabled, log_gemma4_graph_debug
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, vllm_version_is
 
 if vllm_version_is("0.21.0"):
@@ -1923,8 +1922,7 @@ class NPUModelRunner(GPUModelRunner):
 
                 num_tokens_padded = batch_desc.num_tokens
                 if (
-                    env_flag_enabled("VLLM_ASCEND_GEMMA4_DISABLE_PADDED_DECODE_GRAPH", default=True)
-                    and self.is_gemma4_model
+                    self.is_gemma4_model
                     and cudagraph_mode == CUDAGraphMode.FULL
                     and num_tokens_unpadded < num_tokens_padded
                     and num_tokens_across_dp is None
@@ -1932,17 +1930,7 @@ class NPUModelRunner(GPUModelRunner):
                 ):
                     logger.info_once(
                         "Disabling Gemma4 FULL graph for padded decode batches "
-                        "(num_actual_tokens < num_tokens_padded). Set "
-                        "VLLM_ASCEND_GEMMA4_DISABLE_PADDED_DECODE_GRAPH=0 to disable this guard."
-                    )
-                    log_gemma4_graph_debug(
-                        "gemma4_padded_decode_fallback",
-                        "disable padded decode graph num_actual_tokens=%s "
-                        "num_tokens_padded=%s batch=%s mode=%s",
-                        num_tokens_unpadded,
-                        num_tokens_padded,
-                        batch_desc,
-                        cudagraph_mode,
+                        "(num_actual_tokens < num_tokens_padded)."
                     )
                     cudagraph_mode = CUDAGraphMode.NONE
                     batch_desc = BatchDescriptor(num_tokens_unpadded)
@@ -2647,21 +2635,6 @@ class NPUModelRunner(GPUModelRunner):
             # language-model boundary: some compiled paths still inspect
             # input_ids shape even when inputs_embeds carries the tokens.
             model_inputs["input_ids"] = self.input_ids.gpu[:num_tokens_padded]
-        log_gemma4_graph_debug(
-            "model_forward",
-            "model forward runtime=%s batch=%s capturing=%s num_tokens_padded=%s "
-            "num_actual_tokens=%s input_ids_shape=%s positions_shape=%s "
-            "inputs_embeds_shape=%s supports_mm_inputs=%s",
-            getattr(forward_context.cudagraph_runtime_mode, "name", forward_context.cudagraph_runtime_mode),
-            getattr(forward_context, "batch_descriptor", None),
-            getattr(forward_context, "capturing", None),
-            num_tokens_padded,
-            getattr(forward_context, "num_actual_tokens", None),
-            tuple(model_inputs["input_ids"].shape) if model_inputs["input_ids"] is not None else None,
-            tuple(positions.shape) if positions is not None else None,
-            tuple(inputs_embeds.shape) if inputs_embeds is not None else None,
-            self.supports_mm_inputs,
-        )
         run_model = partial(self.model, **model_inputs)
 
         if self.enable_enpu:
