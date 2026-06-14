@@ -194,20 +194,6 @@ PerLayerAttnMetadata: TypeAlias = list[AttnMetadataDict] | AttnMetadataDict
 SEQ_LEN_WITH_MAX_PA_WORKSPACE = 6144
 
 
-def _is_gemma4_model_config(model_config: Any) -> bool:
-    hf_config = getattr(model_config, "hf_config", None)
-    hf_text_config = getattr(model_config, "hf_text_config", None)
-    candidates: list[Any] = [
-        getattr(model_config, "architecture", None),
-        getattr(model_config, "model", None),
-        getattr(hf_config, "model_type", None),
-        getattr(hf_text_config, "model_type", None),
-    ]
-    candidates.extend(getattr(hf_config, "architectures", None) or [])
-    candidates.extend(getattr(hf_text_config, "architectures", None) or [])
-    return any("gemma4" in str(candidate).lower() for candidate in candidates if candidate is not None)
-
-
 @dataclass
 class GraphCaptureContext:
     stream: torch.npu.Stream
@@ -287,8 +273,6 @@ class NPUModelRunner(GPUModelRunner):
 
         with _torch_cuda_wrapper():
             super().__init__(vllm_config, device)
-
-        self.is_gemma4_model = _is_gemma4_model_config(self.model_config)
 
         # NOTE: For FULL mode we change +1 to +2 to reserve extra space for padding.
         # See _pad_query_start_loc_for_fia.
@@ -1921,22 +1905,6 @@ class NPUModelRunner(GPUModelRunner):
                 )
 
                 num_tokens_padded = batch_desc.num_tokens
-                if (
-                    self.is_gemma4_model
-                    and cudagraph_mode == CUDAGraphMode.FULL
-                    and num_tokens_unpadded < num_tokens_padded
-                    and num_tokens_across_dp is None
-                    and self.pcp_size == 1
-                ):
-                    logger.info_once(
-                        "Disabling Gemma4 FULL graph for padded decode batches "
-                        "(num_actual_tokens < num_tokens_padded)."
-                    )
-                    cudagraph_mode = CUDAGraphMode.NONE
-                    batch_desc = BatchDescriptor(num_tokens_unpadded)
-                    num_tokens_padded = num_tokens_unpadded
-                    cudagraph_stats = None
-
                 num_reqs_padded = batch_desc.num_reqs if batch_desc.num_reqs is not None else num_reqs
                 ubatch_slices, ubatch_slices_padded = maybe_create_ubatch_slices(
                     should_ubatch,

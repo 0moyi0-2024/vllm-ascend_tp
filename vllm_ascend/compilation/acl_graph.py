@@ -48,6 +48,29 @@ def _raise_stream_resource_capture_error(exc: RuntimeError) -> None:
     raise RuntimeError(f"{_STREAM_RESOURCE_GUIDANCE}\nOriginal error:\n{exc}") from exc
 
 
+def _is_gemma4_model(vllm_config: VllmConfig) -> bool:
+    model_config = getattr(vllm_config, "model_config", None)
+    hf_config = getattr(model_config, "hf_config", None)
+    hf_text_config = getattr(model_config, "hf_text_config", None)
+    candidates: list[Any] = [
+        getattr(model_config, "architecture", None),
+        getattr(model_config, "model", None),
+        getattr(hf_config, "model_type", None),
+        getattr(hf_text_config, "model_type", None),
+    ]
+    for config in (hf_config, hf_text_config):
+        architectures = getattr(config, "architectures", None)
+        if isinstance(architectures, (list, tuple)):
+            candidates.extend(architectures)
+    return any("gemma4" in str(candidate).lower() for candidate in candidates if candidate is not None)
+
+
+@dataclasses.dataclass(frozen=True)
+class ACLGraphCacheKey:
+    batch_descriptor: BatchDescriptor
+    num_actual_tokens: int | None = None
+
+
 @dataclasses.dataclass
 class ACLGraphEntry:
     batch_descriptor: BatchDescriptor
@@ -105,6 +128,7 @@ class ACLGraphWrapper:
         self.vllm_config = vllm_config
         self.runtime_mode = runtime_mode
         self.compilation_config = vllm_config.compilation_config
+        self.specialize_gemma4_actual_tokens = _is_gemma4_model(vllm_config)
 
         self.first_run_finished = False
         self.is_debugging_mode = envs.VLLM_LOGGING_LEVEL == "DEBUG"
@@ -120,11 +144,26 @@ class ACLGraphWrapper:
         self.aclgraph_options = cudagraph_options
         # the entries for different batch descriptors that we need to capture
         # aclgraphs for.
-        self.concrete_aclgraph_entries: dict[BatchDescriptor, ACLGraphEntry] = {}
+        self.concrete_aclgraph_entries: dict[BatchDescriptor | ACLGraphCacheKey, ACLGraphEntry] = {}
         self.enable_enpu = enable_enpu
         self.use_eagle = use_eagle
 
         ACLGraphWrapper._all_instances.add(self)
+
+    def _get_cache_key(
+        self,
+        batch_descriptor: BatchDescriptor,
+        forward_context: Any,
+    ) -> BatchDescriptor | ACLGraphCacheKey:
+        num_actual_tokens = getattr(forward_context, "num_actual_tokens", None)
+        if (
+            self.specialize_gemma4_actual_tokens
+            and self.runtime_mode == CUDAGraphMode.FULL
+            and num_actual_tokens is not None
+            and num_actual_tokens < batch_descriptor.num_tokens
+        ):
+            return ACLGraphCacheKey(batch_descriptor, int(num_actual_tokens))
+        return batch_descriptor
 
     def __getattr__(self, key: str):
         # allow accessing the attributes of the runnable.
@@ -161,11 +200,13 @@ class ACLGraphWrapper:
             # runtime modes.
             return self.runnable(*args, **kwargs)
 
-        if batch_descriptor not in self.concrete_aclgraph_entries:
-            # create a new entry for this batch descriptor
-            self.concrete_aclgraph_entries[batch_descriptor] = ACLGraphEntry(batch_descriptor=batch_descriptor)
+        cache_key = self._get_cache_key(batch_descriptor, forward_context)
 
-        entry = self.concrete_aclgraph_entries[batch_descriptor]
+        if cache_key not in self.concrete_aclgraph_entries:
+            # create a new entry for this batch descriptor
+            self.concrete_aclgraph_entries[cache_key] = ACLGraphEntry(batch_descriptor=batch_descriptor)
+
+        entry = self.concrete_aclgraph_entries[cache_key]
 
         if entry.aclgraph is None:
             if self.aclgraph_options.debug_log_enable:

@@ -27,6 +27,7 @@ from vllm_ascend.attention.context_parallel.attention_cp import AscendAttentionC
 from vllm_ascend.attention.context_parallel.mla_cp import AscendMlaCPImpl
 from vllm_ascend.attention.mla_v1 import AscendMLADecodeMetadata, AscendMLAMetadata
 from vllm_ascend.compilation.acl_graph import (
+    ACLGraphCacheKey,
     ACLGraphEntry,
     ACLGraphWrapper,
     get_draft_graph_params,
@@ -81,6 +82,15 @@ class TestACLGraphWrapper(TestBase):
         # Mock VllmConfig
         self.mock_vllm_config = MagicMock(spec=VllmConfig)
         self.mock_vllm_config.compilation_config = MagicMock()
+        self.mock_vllm_config.model_config = MagicMock()
+        self.mock_vllm_config.model_config.model = "Qwen"
+        self.mock_vllm_config.model_config.architecture = "QwenForCausalLM"
+        self.mock_vllm_config.model_config.hf_config = MagicMock()
+        self.mock_vllm_config.model_config.hf_config.model_type = "qwen"
+        self.mock_vllm_config.model_config.hf_config.architectures = ["QwenForCausalLM"]
+        self.mock_vllm_config.model_config.hf_text_config = MagicMock()
+        self.mock_vllm_config.model_config.hf_text_config.model_type = "qwen"
+        self.mock_vllm_config.model_config.hf_text_config.architectures = ["QwenForCausalLM"]
 
         # Mock runnable function
         self.mock_runnable = MagicMock(return_value="test_output")
@@ -104,6 +114,7 @@ class TestACLGraphWrapper(TestBase):
         self.mock_forward_context = MagicMock(spec=ForwardContext)
         self.mock_forward_context.batch_descriptor = self.mock_batch_descriptor
         self.mock_forward_context.cudagraph_runtime_mode = CUDAGraphMode.FULL
+        self.mock_forward_context.num_actual_tokens = self.mock_batch_descriptor.num_tokens
 
     @patch("vllm_ascend.compilation.acl_graph.current_platform")
     @patch("vllm_ascend.compilation.acl_graph.envs")
@@ -145,6 +156,67 @@ class TestACLGraphWrapper(TestBase):
         self.assertTrue(wrapper.is_debugging_mode)
         self.assertEqual(wrapper.aclgraph_options, self.mock_cudagraph_options)
         self.assertEqual(wrapper.concrete_aclgraph_entries, {})
+
+    @patch("vllm_ascend.compilation.acl_graph.current_platform")
+    @patch("vllm_ascend.compilation.acl_graph.envs")
+    def test_gemma4_padded_decode_specializes_actual_tokens(self, mock_envs, mock_current_platform):
+        mock_envs.VLLM_LOGGING_LEVEL = "INFO"
+        mock_current_platform.get_global_graph_pool.return_value = self.mock_graph_pool
+        self.mock_vllm_config.model_config.hf_config.model_type = "gemma4"
+        self.mock_vllm_config.model_config.hf_config.architectures = ["Gemma4ForConditionalGeneration"]
+        batch_descriptor = BatchDescriptor(num_tokens=4, num_reqs=4, uniform=True)
+        self.mock_forward_context.num_actual_tokens = 3
+
+        wrapper = ACLGraphWrapper(
+            runnable=self.mock_runnable,
+            vllm_config=self.mock_vllm_config,
+            runtime_mode=CUDAGraphMode.FULL,
+            cudagraph_options=self.mock_cudagraph_options,
+        )
+
+        key = wrapper._get_cache_key(batch_descriptor, self.mock_forward_context)
+
+        self.assertEqual(key, ACLGraphCacheKey(batch_descriptor=batch_descriptor, num_actual_tokens=3))
+
+    @patch("vllm_ascend.compilation.acl_graph.current_platform")
+    @patch("vllm_ascend.compilation.acl_graph.envs")
+    def test_gemma4_full_decode_uses_original_batch_descriptor(self, mock_envs, mock_current_platform):
+        mock_envs.VLLM_LOGGING_LEVEL = "INFO"
+        mock_current_platform.get_global_graph_pool.return_value = self.mock_graph_pool
+        self.mock_vllm_config.model_config.hf_config.model_type = "gemma4"
+        self.mock_vllm_config.model_config.hf_config.architectures = ["Gemma4ForConditionalGeneration"]
+        batch_descriptor = BatchDescriptor(num_tokens=4, num_reqs=4, uniform=True)
+        self.mock_forward_context.num_actual_tokens = 4
+
+        wrapper = ACLGraphWrapper(
+            runnable=self.mock_runnable,
+            vllm_config=self.mock_vllm_config,
+            runtime_mode=CUDAGraphMode.FULL,
+            cudagraph_options=self.mock_cudagraph_options,
+        )
+
+        key = wrapper._get_cache_key(batch_descriptor, self.mock_forward_context)
+
+        self.assertEqual(key, batch_descriptor)
+
+    @patch("vllm_ascend.compilation.acl_graph.current_platform")
+    @patch("vllm_ascend.compilation.acl_graph.envs")
+    def test_non_gemma4_padded_decode_uses_original_batch_descriptor(self, mock_envs, mock_current_platform):
+        mock_envs.VLLM_LOGGING_LEVEL = "INFO"
+        mock_current_platform.get_global_graph_pool.return_value = self.mock_graph_pool
+        batch_descriptor = BatchDescriptor(num_tokens=4, num_reqs=4, uniform=True)
+        self.mock_forward_context.num_actual_tokens = 3
+
+        wrapper = ACLGraphWrapper(
+            runnable=self.mock_runnable,
+            vllm_config=self.mock_vllm_config,
+            runtime_mode=CUDAGraphMode.FULL,
+            cudagraph_options=self.mock_cudagraph_options,
+        )
+
+        key = wrapper._get_cache_key(batch_descriptor, self.mock_forward_context)
+
+        self.assertEqual(key, batch_descriptor)
 
     @patch("vllm_ascend.compilation.acl_graph.current_platform")
     @patch("vllm_ascend.compilation.acl_graph.envs")
