@@ -256,6 +256,47 @@ class TestAscendAttentionBackendImpl(TestBase):
             sinks=torch.tensor([-3.4062], dtype=torch.bfloat16),
         )
 
+    @patch("vllm_ascend.attention.attention_v1.DeviceOperator.reshape_and_cache")
+    def test_kv_sharing_layer_does_not_overwrite_shared_cache(self, mock_reshape_and_cache):
+        impl = AscendAttentionBackendImpl(
+            num_heads=8,
+            head_size=64,
+            scale=1.0,
+            num_kv_heads=8,
+            alibi_slopes=None,
+            sliding_window=None,
+            kv_cache_dtype="float16",
+            logits_soft_cap=None,
+            attn_type=self.attention_type.DECODER,
+            kv_sharing_target_layer_name="producer_layer",
+        )
+        query = torch.randn(2, 8, 64)
+        key = torch.randn(2, 8, 64)
+        value = torch.randn(2, 8, 64)
+        output = torch.empty_like(query)
+        kv_cache = [
+            torch.empty(4, 16, 8, 64),
+            torch.empty(4, 16, 8, 64),
+        ]
+        metadata = MagicMock()
+
+        result = impl.reshape_and_cache(
+            query,
+            key,
+            value,
+            kv_cache,
+            metadata,
+            output,
+        )
+
+        mock_reshape_and_cache.assert_not_called()
+        assert impl.key_cache is kv_cache[0]
+        assert impl.value_cache is kv_cache[1]
+        assert all(
+            actual is expected
+            for actual, expected in zip(result, (query, key, value, output))
+        )
+
     def test_forward_no_attn_metadata(self):
         """Test forward pass when attn_metadata is None"""
         query = torch.randn(10, 8 * 64)
