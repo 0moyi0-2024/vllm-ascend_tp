@@ -5,7 +5,55 @@ from unittest.mock import MagicMock, patch
 import torch
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCacheGroupSpec, KVCacheTensor
 
-from vllm_ascend.worker.model_runner_v1 import NPUModelRunner
+from vllm_ascend.utils import AscendDeviceType
+from vllm_ascend.worker.model_runner_v1 import (
+    NPUModelRunner,
+    _is_gemma4_model,
+    _requires_graph_param_update_before_replay,
+)
+
+
+class TestGemma4GraphUpdateOrder(unittest.TestCase):
+    def _build_config(self, model_type="", architectures=None):
+        return SimpleNamespace(
+            model_config=SimpleNamespace(
+                hf_text_config=SimpleNamespace(model_type=model_type),
+                hf_config=SimpleNamespace(architectures=architectures),
+            )
+        )
+
+    def test_identifies_gemma4_from_model_type_or_architecture(self):
+        self.assertTrue(_is_gemma4_model(self._build_config(model_type="gemma4")))
+        self.assertTrue(
+            _is_gemma4_model(
+                self._build_config(
+                    model_type="other",
+                    architectures=["Gemma4ForConditionalGeneration"],
+                )
+            )
+        )
+        self.assertFalse(_is_gemma4_model(self._build_config(model_type="qwen3")))
+
+    @patch("vllm_ascend.worker.model_runner_v1.get_ascend_device_type")
+    def test_requires_record_first_only_for_gemma4_on_a5(self, mock_device_type):
+        mock_device_type.return_value = AscendDeviceType.A5
+        self.assertTrue(
+            _requires_graph_param_update_before_replay(
+                self._build_config(model_type="gemma4")
+            )
+        )
+        self.assertFalse(
+            _requires_graph_param_update_before_replay(
+                self._build_config(model_type="qwen3")
+            )
+        )
+
+        mock_device_type.return_value = AscendDeviceType.A3
+        self.assertFalse(
+            _requires_graph_param_update_before_replay(
+                self._build_config(model_type="gemma4")
+            )
+        )
 
 
 class TestNPUModelRunnerKVCache(unittest.TestCase):

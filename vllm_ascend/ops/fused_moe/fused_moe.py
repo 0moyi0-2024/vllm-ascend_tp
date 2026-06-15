@@ -92,15 +92,6 @@ def _maybe_mask_padded_moe_tokens(
         return x, router_logits, None
 
     mask = active_mask.to(device=x.device, dtype=torch.bool)
-    logger.info_once(
-        "Masking padded MoE tokens in graph mode: layer=%s activation=%s "
-        "moe_comm_type=%s num_actual_tokens=%s total=%s",
-        layer_name,
-        activation,
-        _EXTRA_CTX.moe_comm_type,
-        getattr(_EXTRA_CTX, "num_actual_tokens", None),
-        x.shape[0],
-    )
     return (
         torch.where(mask[:, None], x, torch.zeros_like(x)),
         torch.where(mask[:, None], router_logits, torch.zeros_like(router_logits)),

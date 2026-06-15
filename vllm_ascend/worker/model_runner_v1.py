@@ -191,6 +191,19 @@ AttnMetadataDict: TypeAlias = dict[str, AttentionMetadata]
 PerLayerAttnMetadata: TypeAlias = list[AttnMetadataDict] | AttnMetadataDict
 
 
+def _is_gemma4_model(vllm_config: VllmConfig) -> bool:
+    text_config = vllm_config.model_config.hf_text_config
+    model_type = getattr(text_config, "model_type", "")
+    if model_type in {"gemma4", "gemma4_text"}:
+        return True
+    architectures = getattr(vllm_config.model_config.hf_config, "architectures", None) or ()
+    return any("Gemma4" in architecture for architecture in architectures)
+
+
+def _requires_graph_param_update_before_replay(vllm_config: VllmConfig) -> bool:
+    return get_ascend_device_type() == AscendDeviceType.A5 and _is_gemma4_model(vllm_config)
+
+
 SEQ_LEN_WITH_MAX_PA_WORKSPACE = 6144
 
 
@@ -436,6 +449,9 @@ class NPUModelRunner(GPUModelRunner):
         # Internal / non-public toggle: read C getenv ``ENPU_ENABLE`` from enpu code (not in envs.py).
         _enpu = get_c_env("ENPU_ENABLE")
         self.enable_enpu = _enpu is not None and _enpu.lower() == "true"
+        self.update_graph_params_before_model = self.enable_enpu or _requires_graph_param_update_before_replay(
+            vllm_config
+        )
 
         self._set_up_drafter()
 
@@ -2605,8 +2621,9 @@ class NPUModelRunner(GPUModelRunner):
             model_inputs["input_ids"] = self.input_ids.gpu[:num_tokens_padded]
         run_model = partial(self.model, **model_inputs)
 
-        if self.enable_enpu:
-            # The soft segmentation scenario requires event.record first, then event.wait
+        if self.update_graph_params_before_model:
+            # A5 Gemma4 task-group updates, like ENPU, require event.record
+            # before the captured graph reaches event.wait.
             self._update_full_graph_params_if_needed(
                 forward_context, num_tokens_padded, positions
             )
