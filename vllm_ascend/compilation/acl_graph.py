@@ -20,6 +20,8 @@ from vllm.forward_context import BatchDescriptor, get_forward_context
 from vllm.logger import logger
 from vllm.platforms import current_platform
 
+from vllm_ascend.ascend_forward_context import _EXTRA_CTX
+
 from ..utils import weak_ref_tensors
 
 _STREAM_RESOURCE_ERROR_CODE = "207008"
