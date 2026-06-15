@@ -78,6 +78,14 @@ def _metadata_key(attn_metadata: dict, fallback_key: str, layer_name: str | None
     return layer_name if layer_name in attn_metadata else fallback_key
 
 
+def _is_sliding_window_graph_param(pre_tokens: int | None) -> bool:
+    return pre_tokens not in (None, SWA_INT_MAX)
+
+
+def _is_sliding_window_v2_graph_param(sliding_window: int | None) -> bool:
+    return sliding_window is not None
+
+
 def _split_optional_workspace_and_layer_name(optional_items: tuple) -> tuple[torch.Tensor | None, str | None]:
     if not optional_items:
         return None, None
@@ -561,6 +569,8 @@ class AscendAttentionBackendImpl(AttentionImpl):
                         metadata_key = _metadata_key(attn_metadata, key, layer_name)
                         seq_lens = attn_metadata[metadata_key].seq_lens_list
                         actual_seq_lengths_q = attn_metadata[metadata_key].actual_seq_lengths_q
+                        if not _is_sliding_window_v2_graph_param(sliding_window):
+                            block_tables = attn_metadata[metadata_key].block_tables
 
                     torch.npu.graph_task_update_begin(update_stream, handle)
                     torch_npu.npu_fused_infer_attention_score_v2.out(
@@ -661,15 +671,9 @@ class AscendAttentionBackendImpl(AttentionImpl):
                         metadata_key = _metadata_key(attn_metadata, key, layer_name)
                         seq_lens = attn_metadata[metadata_key].seq_lens_list
                         actual_seq_lengths_q = attn_metadata[metadata_key].actual_seq_lengths_q
-                        # NOTE:
-                        # For models with sliding-window attention on the FIA full-graph replay path,
-                        # rebinding `block_tables` to the latest metadata tensor causes corrupted /
-                        # repeated outputs in our repro on Ascend NPU.
-                        #
-                        # Keep the captured block_tables tensor on this affected path.
-                        # Non-SWA models preserve the original behavior and continue to refresh
-                        # block_tables from attn_metadata.
-                        if not hasattr(vllm_config.model_config.hf_text_config, "sliding_window"):
+                        # Sliding-window replay keeps its captured block-table
+                        # tensor. Global layers must refresh it for this step.
+                        if not _is_sliding_window_graph_param(pre_tokens):
                             block_tables = attn_metadata[metadata_key].block_tables
 
                     torch.npu.graph_task_update_begin(update_stream, handle)

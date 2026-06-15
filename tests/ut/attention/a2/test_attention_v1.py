@@ -4,13 +4,24 @@ import torch
 
 from tests.ut.base import TestBase
 from vllm_ascend.attention.attention_v1 import (
+    SWA_INT_MAX,
     AscendAttentionBackend,
     AscendAttentionBackendImpl,
     AscendAttentionMetadataBuilder,
     AscendAttentionState,
+    _is_sliding_window_graph_param,
+    _is_sliding_window_v2_graph_param,
 )
 from vllm_ascend.attention.kvcomp_attn.attention_utils import get_kvcomp_decode_params, reshape_and_cache_kvcomp
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
+
+
+def test_graph_param_sliding_window_detection():
+    assert not _is_sliding_window_graph_param(None)
+    assert not _is_sliding_window_graph_param(SWA_INT_MAX)
+    assert _is_sliding_window_graph_param(4096)
+    assert not _is_sliding_window_v2_graph_param(None)
+    assert _is_sliding_window_v2_graph_param(4096)
 
 
 class TestAscendAttentionBackend(TestBase):
