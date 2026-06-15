@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
 from tests.ut.base import TestBase
@@ -9,8 +10,12 @@ from vllm_ascend.attention.attention_v1 import (
     AscendAttentionBackendImpl,
     AscendAttentionMetadataBuilder,
     AscendAttentionState,
+    AttentionGraphParam,
     _is_sliding_window_graph_param,
     _is_sliding_window_v2_graph_param,
+    _metadata_key,
+    _normalize_graph_param,
+    _validate_graph_param_lists,
 )
 from vllm_ascend.attention.kvcomp_attn.attention_utils import get_kvcomp_decode_params, reshape_and_cache_kvcomp
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
@@ -22,6 +27,42 @@ def test_graph_param_sliding_window_detection():
     assert _is_sliding_window_graph_param(4096)
     assert not _is_sliding_window_v2_graph_param(None)
     assert _is_sliding_window_v2_graph_param(4096)
+
+
+def test_attention_graph_param_keeps_kind_and_layer_name():
+    payload = (object(),)
+    param = AttentionGraphParam("fia", payload, "model.layers.1.attn")
+
+    assert _normalize_graph_param(param) == (
+        "fia",
+        payload,
+        "model.layers.1.attn",
+    )
+
+
+def test_attention_graph_param_rejects_legacy_tuple():
+    with pytest.raises(TypeError, match="Expected AttentionGraphParam"):
+        _normalize_graph_param((object(),))
+
+
+def test_metadata_key_requires_captured_layer():
+    metadata = {"model.layers.1.attn": object()}
+
+    assert _metadata_key(metadata, "model.layers.1.attn") == "model.layers.1.attn"
+    with pytest.raises(RuntimeError, match="has no layer name"):
+        _metadata_key(metadata, None)
+    with pytest.raises(RuntimeError, match="missing from runtime metadata"):
+        _metadata_key(metadata, "model.layers.2.attn")
+
+
+def test_validate_graph_param_lists_rejects_mismatched_capture_state():
+    graph_params = MagicMock()
+    graph_params.attn_params = {4: [AttentionGraphParam("fia", (), "layer")]}
+    graph_params.handles = {4: []}
+    graph_params.events = {4: [object()]}
+
+    with pytest.raises(RuntimeError, match="state is inconsistent"):
+        _validate_graph_param_lists(graph_params, 4)
 
 
 class TestAscendAttentionBackend(TestBase):
