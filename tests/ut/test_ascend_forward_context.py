@@ -42,23 +42,28 @@ def _patch_a5_moe(monkeypatch):
     monkeypatch.setattr(forward_context, "get_mc2_tokens_capacity", lambda: 8)
 
 
-def test_a5_gemma4_graph_moe_uses_allgather(monkeypatch):
-    _patch_a5_moe(monkeypatch)
-
-    moe_comm_type = forward_context.select_moe_comm_method(1, _make_vllm_config())
-
-    assert moe_comm_type == MoECommType.ALLGATHER
-
-
-def test_a5_gemma4_eager_moe_uses_allgather(monkeypatch):
+def test_a5_gemma4_padded_graph_moe_uses_allgather(monkeypatch):
     _patch_a5_moe(monkeypatch)
 
     moe_comm_type = forward_context.select_moe_comm_method(
-        1,
-        _make_vllm_config(enforce_eager=True),
+        8,
+        _make_vllm_config(),
+        num_actual_tokens=7,
     )
 
     assert moe_comm_type == MoECommType.ALLGATHER
+
+
+def test_a5_gemma4_full_bucket_moe_keeps_default_mc2_selection(monkeypatch):
+    _patch_a5_moe(monkeypatch)
+
+    moe_comm_type = forward_context.select_moe_comm_method(
+        8,
+        _make_vllm_config(),
+        num_actual_tokens=8,
+    )
+
+    assert moe_comm_type == MoECommType.MC2
 
 
 def test_a5_gemma4_profile_moe_keeps_default_mc2_selection(monkeypatch):

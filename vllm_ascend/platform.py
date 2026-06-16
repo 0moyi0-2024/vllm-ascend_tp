@@ -853,13 +853,6 @@ class NPUPlatform(Platform):
         is_draft_model_prefill = False
         sinks = False
         in_profile_run = get_mrv2_in_profile_run()
-        moe_comm_type = select_moe_comm_method(
-            num_tokens,
-            vllm_config,
-            is_draft_model=is_draft_model,
-            in_profile_run=in_profile_run,
-        )
-        moe_comm_method = get_moe_comm_method(moe_comm_type)
 
         tp_world_size = get_tensor_model_parallel_world_size()
 
@@ -901,6 +894,7 @@ class NPUPlatform(Platform):
             max_tokens_across_dp = num_tokens
         mc2_mask = None
         padded_num_tokens = None
+        num_actual_tokens = None
         if num_tokens is not None:
             num_actual_tokens = num_tokens
             # NOTE: token num which need to pad to when mc2
@@ -910,6 +904,15 @@ class NPUPlatform(Platform):
                 mc2_mask = reserved_mc2_mask[:padded_num_tokens]
                 mc2_mask[:num_actual_tokens] = True
                 mc2_mask[num_actual_tokens:] = False
+        moe_num_tokens = padded_num_tokens if padded_num_tokens is not None else num_tokens
+        moe_comm_type = select_moe_comm_method(
+            moe_num_tokens,
+            vllm_config,
+            is_draft_model=is_draft_model,
+            in_profile_run=in_profile_run,
+            num_actual_tokens=num_actual_tokens,
+        )
+        moe_comm_method = get_moe_comm_method(moe_comm_type)
         return {
             "moe_comm_type": moe_comm_type,
             "moe_comm_method": moe_comm_method,

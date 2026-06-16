@@ -98,6 +98,7 @@ def set_ascend_forward_context(
             vllm_config,
             is_draft_model,
             in_profile_run=in_profile_run,
+            num_actual_tokens=num_actual_tokens,
         )
 
         forward_context.moe_comm_type = moe_comm_type
@@ -256,6 +257,7 @@ def select_moe_comm_method(
     vllm_config: VllmConfig,
     is_draft_model=False,
     in_profile_run: bool = False,
+    num_actual_tokens: int | None = None,
 ) -> MoECommType | None:
     """Select the MoE communication method according to parallel settings,
     device generation, token count, and quantization.
@@ -277,6 +279,7 @@ def select_moe_comm_method(
         vllm_config (VllmConfig): Runtime configuration for the model.
         is_draft_model (bool): Whether the model runs in MTP mode (disables fused MC2).
         in_profile_run (bool): Whether this selection is for profile-run dummy forward.
+        num_actual_tokens (int | None): Number of real tokens before graph padding.
 
     Raises:
         ValueError: If the soc version is unsupported.
@@ -339,12 +342,14 @@ def select_moe_comm_method(
             getattr(vllm_config.model_config.hf_text_config, "top_k_experts", 1),
         )
         world_size = vllm_config.parallel_config.world_size_across_dp
-        if _is_gemma4_model(vllm_config) and not in_profile_run:
+        gemma4_has_graph_padding = num_actual_tokens is not None and num_actual_tokens < num_tokens
+        if _is_gemma4_model(vllm_config) and not in_profile_run and gemma4_has_graph_padding:
             # Gemma4 MoE graph decode is sensitive to MC2/ALLTOALL dynamic
-            # routing metadata on A5. ALLGATHER keeps the model in graph mode
-            # while avoiding replayed dispatch/combine metadata drift. Keep
-            # profile-run on the default path to avoid extra ALLGATHER stream
-            # pressure during memory profiling.
+            # routing metadata on A5 when graph padding changes the active
+            # token mask between capture and replay. ALLGATHER keeps the model
+            # in graph mode while avoiding padded MC2 dispatch/combine drift.
+            # Keep profile-run and full-token decode on the default path to
+            # preserve startup stability and MC2 performance where safe.
             moe_comm_type = MoECommType.ALLGATHER
         elif num_tokens <= mc2_tokens_capacity and world_size > 1:
             moe_comm_type = MoECommType.MC2
