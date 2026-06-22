@@ -45,7 +45,7 @@ class TestPrepareAndFinalize(unittest.TestCase):
     @patch("vllm_ascend.ascend_forward_context.get_forward_context")
     def test_mc2_prepare_finalize(self, mock_get_forward_context, mock_tp_rank, mock_tp_size):
         mock_context = MagicMock()
-        mock_context.mc2_mask = torch.tensor([1, 0, 1])
+        mock_context.mc2_mask = torch.tensor([True, True, False, False])
         mock_context.padded_num_tokens = 4
         mock_get_forward_context.return_value = mock_context
 
@@ -63,7 +63,7 @@ class TestPrepareAndFinalize(unittest.TestCase):
         # Check padding and split
         self.assertEqual(h_out.shape[0], 4)
         self.assertEqual(r_out.shape[0], 4)
-        self.assertEqual(mask.tolist(), [1, 0, 1])
+        self.assertEqual(mask.tolist(), [True, True, False, False])
         self.assertEqual(padded_hidden_states_shape, torch.Size([4, 8]))
 
         # Finalize
@@ -111,7 +111,11 @@ class TestPrepareAndFinalize(unittest.TestCase):
 
     @patch("vllm_ascend.ops.fused_moe.prepare_finalize.get_tensor_model_parallel_world_size", return_value=1)
     @patch("vllm_ascend.ops.fused_moe.prepare_finalize.get_tensor_model_parallel_rank", return_value=0)
-    def test_all2all_prepare_finalize(self, mock_tp_rank, mock_tp_size):
+    @patch("vllm_ascend.ascend_forward_context.get_forward_context")
+    def test_all2all_prepare_finalize(self, mock_get_forward_context, mock_tp_rank, mock_tp_size):
+        mock_context = MagicMock()
+        mock_context.mc2_mask = None
+        mock_get_forward_context.return_value = mock_context
         layer = PrepareAndFinalizeWithAll2All(self.moe_config)
         hidden_states = torch.randn(3, 8)
         router_logits = torch.randn(3, 2)
@@ -129,8 +133,12 @@ class TestPrepareAndFinalize(unittest.TestCase):
 
     @patch("vllm_ascend.ops.fused_moe.prepare_finalize.get_tensor_model_parallel_world_size", return_value=2)
     @patch("vllm_ascend.ops.fused_moe.prepare_finalize.get_tensor_model_parallel_rank", return_value=0)
+    @patch("vllm_ascend.ascend_forward_context.get_forward_context")
     @patch("torch.distributed.all_gather")
-    def test_all2all_tp_split_allgather(self, mock_all_gather, mock_tp_rank, mock_tp_size):
+    def test_all2all_tp_split_allgather(self, mock_all_gather, mock_get_forward_context, mock_tp_rank, mock_tp_size):
+        mock_context = MagicMock()
+        mock_context.mc2_mask = None
+        mock_get_forward_context.return_value = mock_context
         layer = PrepareAndFinalizeWithAll2All(self.moe_config)
         hidden_states = torch.randn(2, 8)
         router_logits = torch.randn(2, 2)
@@ -215,3 +223,42 @@ class TestPrepareAndFinalize(unittest.TestCase):
 
         result_with_tp = layer.finalize(h_out, reduce_results=True)
         self.assertEqual(result_with_tp.shape[0], 3)
+
+    @patch("vllm_ascend.ops.fused_moe.prepare_finalize.get_tensor_model_parallel_world_size", return_value=1)
+    @patch("vllm_ascend.ops.fused_moe.prepare_finalize.get_tensor_model_parallel_rank", return_value=0)
+    @patch("vllm_ascend.ascend_forward_context.get_forward_context")
+    def test_mc2_prepare_masks_padding_tokens(self, mock_get_forward_context, mock_tp_rank, mock_tp_size):
+        mock_context = MagicMock()
+        mock_context.mc2_mask = torch.tensor([True, True, False, False])
+        mock_context.padded_num_tokens = 4
+        mock_get_forward_context.return_value = mock_context
+
+        layer = PrepareAndFinalizeWithMC2(self.moe_config)
+
+        hidden_states = torch.randn(3, 8)
+        router_logits = torch.randn(3, 2)
+
+        original_h = hidden_states.clone()
+        original_r = router_logits.clone()
+
+        prepare_output = layer.prepare(hidden_states, router_logits)
+
+        h_out = prepare_output.hidden_states
+        r_out = prepare_output.router_logits
+
+        self.assertEqual(h_out.shape[0], 4)
+        self.assertEqual(r_out.shape[0], 4)
+
+        mask_2d = torch.tensor([True, True, False, False]).unsqueeze(-1)
+
+        real_hs = h_out[mask_2d.expand_as(h_out)].view(2, 8)
+        real_rl = r_out[mask_2d.expand_as(r_out)].view(2, 2)
+
+        self.assertTrue(torch.allclose(real_hs, original_h[:2], atol=1e-6))
+        self.assertTrue(torch.allclose(real_rl, original_r[:2], atol=1e-6))
+
+        padding_hs = h_out[2:]
+        padding_rl = r_out[2:]
+
+        self.assertTrue(torch.all(padding_hs == 0))
+        self.assertTrue(torch.all(padding_rl == 0))

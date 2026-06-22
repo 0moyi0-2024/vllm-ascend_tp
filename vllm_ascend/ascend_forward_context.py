@@ -235,22 +235,6 @@ def get_mc2_mask():
     return _reserved_mc2_mask
 
 
-def _is_gemma4_model(vllm_config: VllmConfig) -> bool:
-    model_config = vllm_config.model_config
-    hf_config = getattr(model_config, "hf_config", None)
-    hf_text_config = getattr(model_config, "hf_text_config", None)
-
-    model_types = {
-        getattr(hf_config, "model_type", None),
-        getattr(hf_text_config, "model_type", None),
-    }
-    if "gemma4" in model_types:
-        return True
-
-    architectures = getattr(hf_config, "architectures", None) or ()
-    return any("Gemma4" in architecture for architecture in architectures)
-
-
 def select_moe_comm_method(
     num_tokens: int,
     vllm_config: VllmConfig,
@@ -339,14 +323,7 @@ def select_moe_comm_method(
             getattr(vllm_config.model_config.hf_text_config, "top_k_experts", 1),
         )
         world_size = vllm_config.parallel_config.world_size_across_dp
-        if _is_gemma4_model(vllm_config) and not in_profile_run:
-            # Gemma4 MoE graph decode is sensitive to MC2/ALLTOALL dynamic
-            # routing metadata on A5. ALLGATHER keeps the model in graph mode
-            # while avoiding replayed dispatch/combine metadata drift. Keep
-            # profile-run on the default path to avoid extra ALLGATHER stream
-            # pressure during memory profiling.
-            moe_comm_type = MoECommType.ALLGATHER
-        elif num_tokens <= mc2_tokens_capacity and world_size > 1:
+        if num_tokens <= mc2_tokens_capacity and world_size > 1:
             moe_comm_type = MoECommType.MC2
         elif world_size <= num_experts_per_tok:
             moe_comm_type = MoECommType.ALLGATHER

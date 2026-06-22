@@ -150,6 +150,10 @@ class PrepareAndFinalizeWithAll2All(PrepareAndFinalize):
         """
         self.replace_allreduce = replace_allreduce
         self.enable_shared_expert_dp = enable_shared_expert_dp
+        mc2_mask = _EXTRA_CTX.mc2_mask
+        if self.tp_size > 1 and mc2_mask is not None:
+            split_mc2_mask = torch.tensor_split(mc2_mask, self.tp_size, dim=0)
+            mc2_mask = split_mc2_mask[self.tp_rank]
 
         padded_hidden_states_shape = hidden_states.shape
         if not (self.replace_allreduce or self.enable_shared_expert_dp):
@@ -167,6 +171,11 @@ class PrepareAndFinalizeWithAll2All(PrepareAndFinalize):
 
                 hidden_states = split_hidden_states[self.tp_rank]
                 router_logits = split_router_logits[self.tp_rank]
+
+        if mc2_mask is not None and not (self.replace_allreduce or self.enable_shared_expert_dp):
+            if mc2_mask.shape[0] == hidden_states.shape[0]:
+                hidden_states = hidden_states * mc2_mask.unsqueeze(-1).to(hidden_states.dtype)
+                router_logits = router_logits * mc2_mask.unsqueeze(-1).to(router_logits.dtype)
 
         return MoEPrepareOutput(
             hidden_states=hidden_states,
@@ -293,6 +302,11 @@ class PrepareAndFinalizeWithMC2(PrepareAndFinalizeWithAll2All):
                 hidden_states = split_hidden_states[self.tp_rank]
                 router_logits = split_router_logits[self.tp_rank]
 
+        if mc2_mask is not None and not self.replace_allreduce and not self.enable_shared_expert_dp:
+            if mc2_mask.shape[0] == hidden_states.shape[0]:
+                hidden_states = hidden_states * mc2_mask.unsqueeze(-1).to(hidden_states.dtype)
+                router_logits = router_logits * mc2_mask.unsqueeze(-1).to(router_logits.dtype)
+
         return MoEPrepareOutput(
             hidden_states=hidden_states,
             router_logits=router_logits,
@@ -372,6 +386,10 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             # W4A4MXFP4 and  W4A8MXFP4 with AllGather+EP currently does not pre-quantize
             # per-token activations in prepare. Keep quantization in the MoE MLP path.
             pass
+        if mc2_mask is not None and not (self.replace_allreduce or self.enable_shared_expert_dp):
+            if mc2_mask.shape[0] == hidden_states.shape[0]:
+                hidden_states = hidden_states * mc2_mask.unsqueeze(-1).to(hidden_states.dtype)
+                router_logits = router_logits * mc2_mask.unsqueeze(-1).to(router_logits.dtype)
 
         if self.multistream_overlap_gate:
             assert PrepareAndFinalize.quant_stream is not None

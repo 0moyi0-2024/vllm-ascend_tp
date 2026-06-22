@@ -42,26 +42,23 @@ def _patch_a5_moe(monkeypatch):
     monkeypatch.setattr(forward_context, "get_mc2_tokens_capacity", lambda: 8)
 
 
-def test_a5_gemma4_graph_moe_uses_allgather(monkeypatch):
+def test_a5_moe_selects_mc2_within_capacity(monkeypatch):
     _patch_a5_moe(monkeypatch)
 
     moe_comm_type = forward_context.select_moe_comm_method(1, _make_vllm_config())
 
-    assert moe_comm_type == MoECommType.ALLGATHER
+    assert moe_comm_type == MoECommType.MC2
 
 
-def test_a5_gemma4_eager_moe_uses_allgather(monkeypatch):
+def test_a5_moe_selects_allgather_when_tokens_exceed_capacity(monkeypatch):
     _patch_a5_moe(monkeypatch)
 
-    moe_comm_type = forward_context.select_moe_comm_method(
-        1,
-        _make_vllm_config(enforce_eager=True),
-    )
+    moe_comm_type = forward_context.select_moe_comm_method(16, _make_vllm_config())
 
     assert moe_comm_type == MoECommType.ALLGATHER
 
 
-def test_a5_gemma4_profile_moe_keeps_default_mc2_selection(monkeypatch):
+def test_a5_moe_profile_run_selects_mc2_within_capacity(monkeypatch):
     _patch_a5_moe(monkeypatch)
 
     moe_comm_type = forward_context.select_moe_comm_method(
@@ -73,12 +70,12 @@ def test_a5_gemma4_profile_moe_keeps_default_mc2_selection(monkeypatch):
     assert moe_comm_type == MoECommType.MC2
 
 
-def test_a5_non_gemma4_graph_moe_keeps_default_mc2_selection(monkeypatch):
+def test_a5_moe_eager_mode_selects_mc2_within_capacity(monkeypatch):
     _patch_a5_moe(monkeypatch)
 
     moe_comm_type = forward_context.select_moe_comm_method(
         1,
-        _make_vllm_config(model_type="qwen3_moe", architectures=("Qwen3MoeForCausalLM",)),
+        _make_vllm_config(enforce_eager=True),
     )
 
     assert moe_comm_type == MoECommType.MC2

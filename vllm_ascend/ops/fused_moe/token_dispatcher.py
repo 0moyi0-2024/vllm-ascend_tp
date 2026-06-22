@@ -51,6 +51,8 @@ from vllm_ascend.utils import (
 EXPERT_TOKEN_NUMS_TYPE_CUMSUM = 0
 EXPERT_TOKEN_NUMS_TYPE_COUNT = 1
 
+_MC2_DIAG_V1_FALLBACK = False
+
 
 def _get_expert_token_nums_type(token_dispatch_input: MoETokenDispatchInput) -> int:
     # grouped_matmul_swiglu_quant_v2 consumes per-expert counts; existing
@@ -228,11 +230,13 @@ class TokenDispatcherWithMC2(MoETokenDispatcher[MoEMC2CombineMetadata]):
         token_dispatch_input: MoETokenDispatchInput,
     ):
         kwargs_mc2 = self.get_dispatch_mc2_kwargs(token_dispatch_input)
-        output = (
-            torch_npu.npu_moe_distribute_dispatch_v2(**kwargs_mc2)
-            if self.enable_dispatch_v2
-            else torch_npu.npu_moe_distribute_dispatch(**kwargs_mc2)
-        )
+        use_v1 = not self.enable_dispatch_v2 or _MC2_DIAG_V1_FALLBACK
+        if use_v1:
+            v1_kwargs = {k: v for k, v in kwargs_mc2.items()
+                        if k not in ("group_tp", "tp_world_size", "tp_rank_id", "expert_scales", "comm_alg")}
+            output = torch_npu.npu_moe_distribute_dispatch(**v1_kwargs)
+        else:
+            output = torch_npu.npu_moe_distribute_dispatch_v2(**kwargs_mc2)
         # comm_stream.wait_stream(torch.npu.current_stream())
         (
             expand_x,
@@ -331,11 +335,14 @@ class TokenDispatcherWithMC2(MoETokenDispatcher[MoEMC2CombineMetadata]):
         assert bias is None, "Bias is not supported in MoEAlltoAllvTokenDispatcher."
 
         kwargs_mc2 = self.get_combine_mc_kwargs(hidden_states, combine_metadata)
-        combined_output = (
-            torch_npu.npu_moe_distribute_combine_v2(**kwargs_mc2)
-            if self.enable_dispatch_v2
-            else torch_npu.npu_moe_distribute_combine(**kwargs_mc2)
-        )
+        use_v1 = not self.enable_dispatch_v2 or _MC2_DIAG_V1_FALLBACK
+        if use_v1:
+            v1_kwargs = {k: v for k, v in kwargs_mc2.items()
+                        if k not in ("group_tp", "tp_world_size", "tp_rank_id", "assist_info_for_combine", "comm_alg")}
+            v1_kwargs["expand_idx"] = combine_metadata.assist_info_for_combine
+            combined_output = torch_npu.npu_moe_distribute_combine(**v1_kwargs)
+        else:
+            combined_output = torch_npu.npu_moe_distribute_combine_v2(**kwargs_mc2)
 
         return combined_output
 
