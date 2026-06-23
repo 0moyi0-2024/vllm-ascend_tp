@@ -1,0 +1,36 @@
+evalscope perf \
+  --parallel 1 \
+  --number 10 \
+  --model gemma4_31B \
+  --url http://127.0.0.1:1025/v1/chat/completions \
+  --api openai \
+  --dataset random \
+  --max-tokens 1536 \
+  --min-tokens 1536 \
+  --prefix-length 0 \
+  --min-prompt-length 4096 \
+  --max-prompt-length 4096 \
+  --tokenizer-path /home/xty/gemma4/31B \
+  --extra-args '{"ignore_eos": true}' \
+  --image-num 0 \
+  --no-test-connection
+
+
+evalscope perf \
+  --parallel 4 \
+  --model /home/xty/gemma4/26B \
+  --url http://127.0.0.1:8000/v1/chat/completions \
+  --api openai \
+  --dataset random_vl \
+  --min-tokens 30 \
+  --max-tokens 30 \
+  --prefix-length 0 \
+  --min-prompt-length 256 \
+  --max-prompt-length 256 \
+  --image-width 1920 \
+  --image-height 1080 \
+  --image-format RGB \
+  --image-num 1 \
+  --number 12 \
+  --tokenizer-path /home/xty/gemma4/26B \
+  --debug
