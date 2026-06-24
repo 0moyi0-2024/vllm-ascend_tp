@@ -48,6 +48,16 @@ Gemma4 修复需要的是 target/non-draft layer metadata 绑定，不需要影�
 
 对 custom routing function 的 `num_experts` 兼容逻辑保留，避免 Gemma4 routing function 不接受 `num_experts` 时启动报错，同时不破坏其它模型原先带 `num_experts` 的调用路径。
 
+这里需要保留 `def _inspect_custom_routing_accepts_num_experts(custom_routing_function: Callable) -> bool` 的原因是：不同模型在 vLLM 侧提供的 custom routing function 签名并不完全一致。
+
+- 有些 MoE routing function 显式声明 `num_experts`，旧逻辑直接传入 `num_experts=num_experts` 可以正常工作。
+- Gemma4 的 routing function 不声明 `num_experts`，如果仍然无条件传入该参数，会触发 `TypeError: got an unexpected keyword argument 'num_experts'`，导致模型启动失败。
+- 如果 custom routing function 支持 `**kwargs`，也可以安全接收 `num_experts`。
+
+因此这里通过 `inspect.signature` 做一次签名判断：只有当 routing function 显式包含 `num_experts`，或者包含 `**kwargs` 时，才把 `num_experts` 放进 `routing_kwargs`。这样既兼容 Gemma4，也保持其它模型原本依赖 `num_experts` 的行为。
+
+Gemma4 没有 `num_experts` 参数不是因为它没有专家数，而是因为它的自定义 routing API 不需要调用方额外传这个字段。Gemma4 的 routing 可以从 `gating_output/router_logits` 的最后一维得到专家维度，也可以使用模型配置里已有的专家信息，所以函数签名只保留实际需要的输入，例如 `hidden_states`、`gating_output`、`topk`、`renormalize`。这和部分其它 MoE 模型把 `num_experts` 作为显式参数传入的接口习惯不同。
+
 ## 最终方案
 
 - Gemma4 图模式需要的两个关键修复仍保留：workspace 按最大值缓存复用；attention replay 按 layer name 绑定 metadata。
