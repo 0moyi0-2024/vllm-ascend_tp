@@ -89,6 +89,12 @@ def using_paged_attention(runtime_shape: int, vllm_config: VllmConfig, head_size
         return False
     if get_ascend_device_type() == AscendDeviceType.A5:
         return False
+    hf_text_config = vllm_config.model_config.hf_text_config
+    # Mixed global/sliding-window models can otherwise split full-attention
+    # decode layers between PA and FIA by head size. Keep full decode replay on
+    # PA while sliding-window layers remain on FIA in the attention backend.
+    if head_size is not None and hasattr(hf_text_config, "sliding_window"):
+        return True
     # TODO: Remove this fallback when A2/A3 FIA TND supports Gemma4's
     # 512-dim global attention heads. Decode can use PA directly; prefill is
     # handled by the device adaptor.
