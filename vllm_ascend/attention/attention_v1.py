@@ -1463,10 +1463,8 @@ class AscendAttentionBackendImpl(AttentionImpl):
     ):
         num_tokens = query.shape[0]
 
-        if (
-            attn_metadata.attn_state == AscendAttentionState.DecodeOnly
-            and self.sliding_window is None
-            and using_paged_attention(num_tokens, self.vllm_config, self.head_size)
+        if attn_metadata.attn_state == AscendAttentionState.DecodeOnly and using_paged_attention(
+            num_tokens, self.vllm_config, self.head_size
         ):
             output = self.forward_paged_attention(query, attn_metadata, output)
         else:

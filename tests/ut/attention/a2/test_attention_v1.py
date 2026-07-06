@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import torch
+from vllm.config.compilation import CUDAGraphMode
 
 import vllm_ascend.attention.attention_v1 as attn_module
 from tests.ut.base import TestBase
@@ -49,6 +50,20 @@ class TestAttentionGraphHelpers(TestBase):
         vllm_config.speculative_config = None
         with patch("vllm_ascend.attention.utils.get_ascend_device_type", return_value=AscendDeviceType.A2):
             self.assertTrue(using_paged_attention(1, vllm_config, head_size=FIA_TND_LARGE_HEAD_FALLBACK_HEAD_SIZE))
+
+    def test_mixed_large_head_model_uses_paged_attention_without_head_size(self):
+        vllm_config = SimpleNamespace(
+            speculative_config=None,
+            compilation_config=SimpleNamespace(cudagraph_mode=CUDAGraphMode.FULL_DECODE_ONLY),
+            model_config=SimpleNamespace(
+                hf_text_config=SimpleNamespace(
+                    global_head_dim=FIA_TND_LARGE_HEAD_FALLBACK_HEAD_SIZE,
+                    layer_types=["sliding_attention", "full_attention"],
+                )
+            ),
+        )
+        with patch("vllm_ascend.attention.utils.get_ascend_device_type", return_value=AscendDeviceType.A2):
+            self.assertTrue(using_paged_attention(1, vllm_config))
 
 
 class TestAscendAttentionBackend(TestBase):
@@ -339,6 +354,23 @@ class TestAscendAttentionBackendImpl(TestBase):
 
         self.impl_large_head.forward_paged_attention.assert_called_once()
         self.impl_large_head.forward_fused_infer_attention.assert_not_called()
+        self.assertIs(result, output)
+        mock_using_pa.assert_called_once()
+
+    @patch("vllm_ascend.attention.attention_v1.using_paged_attention", return_value=True)
+    def test_sliding_decode_can_use_paged_attention(self, mock_using_pa):
+        query = torch.randn(2, 8, 64)
+        output = torch.empty_like(query)
+        metadata = self.attn_metadata
+        metadata.attn_state = AscendAttentionState.DecodeOnly
+
+        self.impl_swa.forward_paged_attention = MagicMock(return_value=output)
+        self.impl_swa.forward_fused_infer_attention = MagicMock(return_value=output)
+
+        result = self.impl_swa.forward_impl(query, None, None, (), metadata, output)
+
+        self.impl_swa.forward_paged_attention.assert_called_once()
+        self.impl_swa.forward_fused_infer_attention.assert_not_called()
         self.assertIs(result, output)
         mock_using_pa.assert_called_once()
 

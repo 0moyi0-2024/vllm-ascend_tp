@@ -99,6 +99,15 @@ def using_paged_attention(runtime_shape: int, vllm_config: VllmConfig, head_size
     cudagraph_mode = vllm_config.compilation_config.cudagraph_mode
     if cudagraph_mode != CUDAGraphMode.FULL_DECODE_ONLY:
         return False
+    hf_text_config = getattr(getattr(vllm_config, "model_config", None), "hf_text_config", None)
+    layer_types = getattr(hf_text_config, "layer_types", None)
+    if (
+        getattr(hf_text_config, "global_head_dim", None) == FIA_TND_LARGE_HEAD_FALLBACK_HEAD_SIZE
+        and isinstance(layer_types, (list, tuple))
+        and "sliding_attention" in layer_types
+        and any(layer_type != "sliding_attention" for layer_type in layer_types)
+    ):
+        return True
 
     return runtime_shape in get_ascend_config().pa_shape_list
 
