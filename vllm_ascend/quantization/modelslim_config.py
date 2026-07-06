@@ -365,7 +365,14 @@ def get_linear_quant_type(
             prefix.replace(proj_name, shard_proj_name) for shard_proj_name in packed_modules_mapping[proj_name]
         ]
         for shard_prefix in shard_prefixes:
-            shard_quant_type = quant_description[shard_prefix + ".weight"]
+            shard_key = shard_prefix + ".weight"
+            # Skip shards that have no dedicated quant entry. This happens for
+            # k_eq_v layers (e.g. Gemma4 full-attention layers) where v_proj is
+            # replicated from k_proj at load time, so only q_proj/k_proj exist in
+            # the quant description. Their quant type follows the present shards.
+            if shard_key not in quant_description:
+                continue
+            shard_quant_type = quant_description[shard_key]
 
             if quant_type is None:
                 quant_type = shard_quant_type
@@ -671,7 +678,14 @@ class AscendModelSlimConfig(QuantizationConfig):
 
             is_skipped = None
             for shard_prefix in shard_prefixes:
-                is_shard_skipped = self.quant_description[shard_prefix + ".weight"] == "FLOAT"
+                shard_key = shard_prefix + ".weight"
+                # Skip shards absent from the quant description (e.g. v_proj of
+                # k_eq_v layers like Gemma4 full-attention, where V is replicated
+                # from K and has no dedicated quant entry). Their skip status
+                # follows the present shards.
+                if shard_key not in self.quant_description:
+                    continue
+                is_shard_skipped = self.quant_description[shard_key] == "FLOAT"
 
                 if is_skipped is None:
                     is_skipped = is_shard_skipped
