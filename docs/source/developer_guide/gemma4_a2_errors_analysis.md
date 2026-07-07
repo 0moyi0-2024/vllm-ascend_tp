@@ -177,10 +177,79 @@ pip install --force-reinstall --no-deps \
 
 ---
 
+## 问题三：`PagedAttentionGraphParam` unpack 崩溃（fix 分支推理期）
+
+### 背景
+
+为修问题二，在 `fix-gemma4-mixed-pa-fia-param-utils` 分支（commit `d9664f0d`，把 mixed PA replay helper 移到 `attention/utils.py`）引入 `PagedAttentionGraphParam` dataclass 包装 PA 参数，并在 `update_graph_params` 用 `isinstance` 分发：
+
+```python
+@dataclass
+class PagedAttentionGraphParam:
+    params: tuple
+    layer_name: str | None
+```
+
+`full_graph_pa` 捕获时把 PA 9 元组包成 `PagedAttentionGraphParam(params, layer_name)`。
+
+### 原始报错
+
+加载/编译/cudagraph 捕获/服务启动均成功，**真实 decode 推理**时崩溃：
+
+```
+Traceback (most recent call last):
+  ...
+  File ".../vllm_ascend/worker/model_runner_v1.py", line 2882, in _model_forward
+    self._update_full_graph_params_if_needed(
+  File ".../vllm_ascend/worker/model_runner_v1.py", line 2842, in _update_full_graph_params_if_needed
+    update_full_graph_params(
+  File ".../vllm_ascend/compilation/acl_graph.py", line 297, in update_full_graph_params
+    impl_cls.update_graph_params(
+  File ".../vllm_ascend/attention/attention_v1.py", line 730, in update_graph_params
+    (
+TypeError: cannot unpack non-iterable PagedAttentionGraphParam object
+RuntimeError: Worker failed with error 'cannot unpack non-iterable PagedAttentionGraphParam object'
+```
+
+### 根因分析
+
+`update_graph_params` 有三个分支，`isinstance(param, PagedAttentionGraphParam)` 分发**只加了两处，漏了 else（FIA）分支**：
+
+| 分支 | 行 | `isinstance(PagedAttentionGraphParam)` 分发 | unpack 元数 |
+|---|---|---|---|
+| `if using_paged_attention(...)`（PA） | 464 → 480 | ✅ 有（`param = param.params` 解包） | 9 |
+| `elif _EXTRA_CTX.sinks:`（FIA-v2） | 521 → 572 | ✅ 有（PA update + `continue`） | 15 |
+| `else:`（FIA） | 636 → 730 | ❌ **无** | 21 |
+
+Gemma4 在 `FULL_DECODE_ONLY` 下：`using_paged_attention(num_tokens, vllm_config)`（不传 head_size）→ False（跳过 464 分支），`_EXTRA_CTX.sinks` → False（跳过 521 分支），落入 `else`（636）FIA 分支。该分支循环里 730 行直接对 `param` 做 21 元 unpack，而 full-attention（512）层的 `param` 是 `PagedAttentionGraphParam`（不可迭代）→ `cannot unpack non-iterable`。
+
+即：**fix 把 PA 参数包成了不可迭代的 `PagedAttentionGraphParam`，但只在 PA 分支和 sinks 分支处理了它，else（FIA）分支没处理**——而 Gemma4 恰好走 else 分支，于是 512-head 层的 PA 参数在 FIA 21 元 unpack 处崩。
+
+### 修复方向（未应用，待确认）
+
+在 `else`（FIA）分支循环体开头补上与 `sinks` 分支一致的 `isinstance(param, PagedAttentionGraphParam)` 分发：命中则调 `update_paged_attention_graph_param(...)` 做 PA update 并 `continue`，否则走 21 元 FIA unpack。462 与 sinks 分支已有此分发，else 分支对齐即可。
+
+### 复现
+
+```bash
+# 分支 fix-gemma4-mixed-pa-fia-param-utils（含 d9664f0d）+ 本地 rope.py / modelslim_config.py(k_eq_v) 补丁
+vllm serve /home/wangminghua/gemma4_w8a8_rollback --tensor-parallel-size 4 \
+  --enable-auto-tool-choice --tool-call-parser gemma4 --reasoning-parser gemma4 \
+  --enable-prefix-caching --gpu-memory-utilization 0.92 --port 1025 \
+  --limit-mm-per-prompt '{"image": 1}' \
+  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+# 启动成功；首条推理请求 500：
+curl --noproxy '*' http://127.0.0.1:1025/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"gemma4_w8a8_rollback","messages":[{"role":"user","content":"hi"}],"max_tokens":8}'
+```
+
+---
+
 ## 汇总
 
 | 问题 | 类型 | 根因 | 是否有非代码解法 |
 |---|---|---|---|
 | rope UB 溢出 | 代码（tiling） | `_triton_rope` 的 `BLOCK_SIZE_HEAD=64` 对 Gemma4 大 head_dim 分块不足 | 否（HAS_TRITON 耦合 rope/block_table；multi-buffer 无 env；只有 3.2.1） |
 | cudagraph 21 vs 9 | 代码（PA 判定不一致） | `update_graph_params` 漏传 `head_size`，且 `forward_impl` PA 路由还要求 `sliding_window is None` | 否（`pa_shape_list` 仅反转错误，sliding 层 capture 仍 FIA） |
+| PagedAttentionGraphParam unpack 崩溃 | 代码（fix 分支分发遗漏） | `update_graph_params` 的 else（FIA）分支未对 `PagedAttentionGraphParam` 做 isinstance 分发，Gemma4 走 else → 21 元 unpack 崩 | 否（需在 else 分支补 isinstance 分发） |
 | triton 不可下标 | 环境 | triton 3.5.0 覆盖 triton-ascend 的 ascend libtriton.so | 是（重装 triton-ascend 3.2.1） |
