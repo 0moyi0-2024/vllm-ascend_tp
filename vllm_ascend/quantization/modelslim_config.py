@@ -274,6 +274,30 @@ packed_modules_model_mapping: dict[str, dict[str, list[str]]] = {
         "fused_qkv_a_proj": ["q_a_proj", "kv_a_proj_with_mqa"],
         "o_proj": ["dense"],
     },
+    "gemma4": {
+        "qkv_proj": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+        ],
+        "gate_up_proj": [
+            "gate_proj",
+            "up_proj",
+        ],
+        "experts": ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"],
+    },
+    "gemma4_text": {
+        "qkv_proj": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+        ],
+        "gate_up_proj": [
+            "gate_proj",
+            "up_proj",
+        ],
+        "experts": ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"],
+    },
     "step3p5": {
         "qkv_proj": [
             "q_proj",
@@ -309,6 +333,8 @@ QUANT_MODEL_PREFIX_MAPPINGS = {
         "embed.": "model.embed_tokens.",
         "head.": "lm_head.",
     },
+    "gemma4": {},
+    "gemma4_text": {},
 }
 
 
@@ -328,6 +354,17 @@ QUANT_MODEL_SUBSTR_MAPPINGS = {
     # lookup matches the on-disk naming.
     "step3p5_mtp": {
         ".mtp_block.": ".",
+    },
+    # Gemma4's vLLM module path nests experts under a ``.moe.`` wrapper
+    # (``...layers.N.moe.experts``), but the checkpoint's
+    # quant_model_description.json keys it without that infix
+    # (``...layers.N.experts.0.gate_proj.weight``). Strip ``.moe`` so the
+    # quant lookup matches the on-disk naming.
+    "gemma4": {
+        ".moe.experts": ".experts",
+    },
+    "gemma4_text": {
+        ".moe.experts": ".experts",
     },
 }
 
@@ -383,8 +420,10 @@ def get_linear_quant_type(
             # shards fall through to the original dictionary lookup below.
             if shard_key not in quant_description and _is_missing_k_eq_v_shard(shard_key, quant_description):
                 continue
-            shard_quant_type = quant_description[shard_key]
+            shard_quant_type = quant_description.get(shard_key)
 
+            if shard_quant_type is None:
+                continue
             if quant_type is None:
                 quant_type = shard_quant_type
             elif shard_quant_type != quant_type:
@@ -648,6 +687,13 @@ class AscendModelSlimConfig(QuantizationConfig):
                     parts = parts[: exp_idx + 1]
                     prefix = ".".join(parts)
 
+        if model_type in ["gemma4", "gemma4_text"]:
+            # Gemma4 nests FusedMoE experts under a ``.moe.`` wrapper in vLLM
+            # (``...layers.N.moe.experts``) while the quant description keys
+            # experts without it (``...layers.N.experts...``). Align the prefix
+            # so the per-expert shard lookup succeeds.
+            prefix = prefix.replace(".moe.experts", ".experts")
+
         if model_type in ["bailing_hybrid"]:
             # Adapt to bailing_hybrid architecture: update layer names to MoE convention
             prefix = prefix.replace("linear_attn", "attention")
@@ -714,7 +760,7 @@ class AscendModelSlimConfig(QuantizationConfig):
                     shard_key, self.quant_description
                 ):
                     continue
-                is_shard_skipped = self.quant_description[shard_key] == "FLOAT"
+                is_shard_skipped = self.quant_description.get(shard_key, "FLOAT") == "FLOAT"
 
                 if is_skipped is None:
                     is_skipped = is_shard_skipped

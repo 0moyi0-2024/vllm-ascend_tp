@@ -77,7 +77,7 @@ from vllm_ascend.ops.fused_moe.moe_stage_params import (
     MoERoutingParams,
 )
 from vllm_ascend.quantization.quant_type import QuantType
-from vllm_ascend.utils import vllm_version_is
+from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, vllm_version_is
 
 
 def _build_mxfp_params(
@@ -236,7 +236,16 @@ def build_mlp_compute_input(
             QuantType.W8A8FP8,
             QuantType.W4A16MXFP4,
         )
-        and use_fusion_ops,
+        and use_fusion_ops
+        # A5's CANN has no int8 GroupedMatmulSwigluQuantV2 kernel binary, so the
+        # fused gmm+swiglu+quant path ("Cannot find bin of op
+        # GroupedMatmulSwigluQuantV2 .../int8/...") crashes for W8A8 (int8) MoE.
+        # Fall back to the non-fused npu_grouped_matmul +
+        # npu_dequant_swiglu_quant path on A5.
+        and not (
+            get_ascend_device_type() == AscendDeviceType.A5
+            and fused_experts_input.quant.is_int_quant
+        ),
         activation=fused_experts_input.activation,
         need_trans=fused_experts_input.need_trans,
         dynamic_eplb=fused_experts_input.dynamic_eplb,

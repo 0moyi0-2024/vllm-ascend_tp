@@ -287,17 +287,15 @@ def _select_a5_moe_comm_method(
     vllm_config: VllmConfig,
     mc2_tokens_capacity: int,
 ) -> MoECommType:
-    num_experts_per_tok = getattr(
-        vllm_config.model_config.hf_text_config,
-        "num_experts_per_tok",
-        getattr(vllm_config.model_config.hf_text_config, "top_k_experts", 1),
-    )
-    world_size = vllm_config.parallel_config.world_size_across_dp
-    if num_tokens <= mc2_tokens_capacity and world_size > 1:
-        return MoECommType.MC2
-    if world_size <= num_experts_per_tok:
-        return MoECommType.ALLGATHER
-    return MoECommType.ALLTOALL
+    # MC2/ALLTOALL MoE comm crash on A5: the MC2 dispatch op
+    # (aclnnMoeDistributeDispatchV4) fails to open the HCCL AIV UB
+    # IPC shared-memory handle (halShmemOpenHandle drvRetCode=17), and
+    # ALLTOALL hits error 561000. Always use ALLGATHER here.
+    # Cudagraph padding-token router_logits contamination is handled
+    # by masking in PrepareAndFinalizeWithAllGather / select_experts,
+    # so ALLGATHER is correct in graph mode too.
+    del num_tokens, vllm_config, mc2_tokens_capacity
+    return MoECommType.ALLGATHER
 
 
 def select_moe_comm_method(num_tokens: int, vllm_config: VllmConfig, is_draft_model=False) -> MoECommType | None:
