@@ -9,8 +9,9 @@ Gemma4 是一类具有混合注意力结构、可选 KV-sharing 机制、MoE/Den
 1. 支持 Gemma4 Dense 与 MoE 模型在 Ascend A2、A3 和 A5 设备上的 eager 与 ACLGraph 推理。
 2. 正确处理 Gemma4 交错注意力层，包括 sliding attention 与 full/global attention 的不同 head dimension 和不同 metadata 语义。
 3. 支持 Gemma4 的 KV-sharing / YOCO 结构，保证 cache 写入、读取和 graph replay 的 layer 语义一致。
-4. 在 A2/A3 与 A5 的算子能力差异下，选择最小、稳定、可维护的设备侧 fallback 策略。
-5. 保持对已有模型路径的影响最小，尽量复用 vLLM 与 vLLM Ascend 主干已有能力。
+4. 支持 Gemma4 BF16 与 W8A8 量化路径，保证 ModelSlim 权重描述、MoE expert 映射和 expert activation 与模型真实结构一致。
+5. 在 A2/A3 与 A5 的算子能力差异下，选择最小、稳定、可维护的设备侧 fallback 策略。
+6. 保持对已有模型路径的影响最小，尽量复用 vLLM 与 vLLM Ascend 主干已有能力。
 
 本文从模型结构出发，说明 Gemma4 的关键特征、A2/A3 与 A5 的适配差异、图模式中容易出现的问题，以及最终采用的设计方案。
 
@@ -263,7 +264,30 @@ Gemma4 MoE 版本除了 attention 以外，还需要保证 MoE 路径在 eager �
 
 对于 MoE 图模式，适配原则是优先保持语义稳定，再逐步恢复性能优化。若融合通信算子在特定图模式下存在设备或 shape 约束，应使用可验证的稳定路径作为基线，再评估融合路径的性能收益。
 
-### 4.8 MTP 适配思路
+### 4.8 量化适配思路
+
+Gemma4 的 W8A8_DYNAMIC 量化适配需要同时处理权重描述映射和算子执行语义。它不是简单复用其它 MoE 模型的量化配置即可完成，原因有两类：
+
+1. Gemma4 full-attention `k_eq_v` layer 的 ModelSlim 量化描述中可能只有 `q_proj` 和 `k_proj`，没有独立的 `v_proj` 描述。
+2. Gemma4 MoE expert 使用 `gelu_tanh` activation，而部分 Ascend quantized MoE MLP 路径历史上默认使用 SwiGLU 融合算子。
+
+适配方案分为两层：
+
+- ModelSlim 配置层：
+  - 对 Gemma4 / Gemma4 text 模型补充 packed module mapping，使 attention、MLP 和 MoE expert 的量化 shard 能按 packed 规则解析。
+  - 对 Gemma4 `k_eq_v` 场景允许缺失 `v_proj` quant entry，但只在 `q_proj` 和 `k_proj` 均存在时生效。
+  - 对 Gemma4 MoE expert 增加 `.moe.experts` 到 `.experts` 的前缀映射，使 vLLM 运行时模块名能匹配 checkpoint 中的 ModelSlim 量化描述。
+  - 这些规则只作用于 `gemma4` / `gemma4_text`，避免对其它模型引入全局 expert 前缀改写。
+
+- quantized MoE MLP 执行层：
+  - `quant_apply_mlp` 不能假设所有量化 MoE 都使用 SwiGLU。
+  - 当模型 activation 为 `gelu` / `gelu_tanh` 时，应走 `GMM -> GELU -> requant -> GMM2` 的非 SwiGLU 路径。
+  - 原有 SwiGLU 融合路径继续服务 silu / swiglu / swiglustep / swigluoai 等模型，不改变其它模型的高性能路径。
+  - MC2 和 GMM SwiGLU fusion 分支需要显式避开 GELU activation，防止 Gemma4 W8A8 expert 使用错误激活函数。
+
+这样可以解决两类量化问题：一是启动阶段因为量化描述 key 不匹配导致加载失败，二是运行阶段因为 expert activation 错误导致精度显著下降。
+
+### 4.9 MTP 适配思路
 
 Gemma4 MTP 适配应建立在 vLLM 原生 Gemma4 MTP 语义之上：
 
@@ -389,7 +413,32 @@ MTP 的核心约束是：draft attention 的 K/V 来自 target cache，因此不
 - 将 MoE 问题拆解为 routing、expert、communication、logits 四个层次。
 - 能更快定位图模式差异来源。
 
-### 5.7 问题七：MTP Q-only attention
+### 5.7 问题七：Gemma4 W8A8 量化加载与 MoE activation 不匹配
+
+现象：
+
+- Gemma4 full-attention `k_eq_v` layer 的 ModelSlim quant description 中可能缺少 `v_proj.weight`，但 packed `qkv_proj` 解析原本要求 `q_proj` / `k_proj` / `v_proj` 全部存在，导致量化 checkpoint 加载时报 `KeyError`。
+- Gemma4 MoE expert 在模型配置中使用 `gelu_tanh`，但 quantized MoE MLP 旧路径可能硬走 SwiGLU 融合算子。
+- eager/float MoE 路径使用模型真实 activation，而量化 MoE 路径使用错误 activation，会表现为 W8A8 模型精度明显低于预期。
+
+解决方案：
+
+- 在 ModelSlim config 中为 Gemma4 增加局部量化映射：
+  - 支持 `k_eq_v` 缺失 `v_proj` 的预期布局。
+  - 支持 Gemma4 MoE expert 的 `.moe.experts` 到 `.experts` 前缀映射。
+  - 保留其它缺失 shard 的原有报错行为，避免吞掉真正错误的量化描述。
+- 在 fused MoE MLP 中按模型 activation 分流：
+  - GELU / `gelu_tanh` 走非 SwiGLU 的 `GMM -> GELU -> requant -> GMM2` 路径。
+  - SwiGLU 系列模型继续走原有 fused SwiGLU quant 路径。
+  - fusion-on 与 MC2 场景下，GELU activation 显式跳过 SwiGLU 专用融合分支。
+
+收益：
+
+- Gemma4 W8A8_DYNAMIC checkpoint 能正常加载。
+- Gemma4 MoE 量化 expert 使用模型真实 activation，避免量化路径精度掉点。
+- 量化适配范围限制在 Gemma4 和 GELU activation 场景，不改变其它 SwiGLU MoE 模型的行为。
+
+### 5.8 问题八：MTP Q-only attention
 
 现象：
 
@@ -450,7 +499,35 @@ MTP 的核心约束是：draft attention 的 K/V 来自 target cache，因此不
 - attention 主流程不感知设备差异。
 - A5、A2/A3 后续能力变化可以在 device 层收敛。
 
-### 6.4 `spec_decode/gemma4_proposer.py`
+### 6.4 `quantization/modelslim_config.py`
+
+职责：
+
+- 处理 Gemma4 ModelSlim 量化描述与 vLLM 运行时模块名之间的映射差异。
+- 支持 Gemma4 `k_eq_v` layer 中预期缺失 `v_proj` quant entry 的布局。
+- 支持 Gemma4 MoE expert 的 checkpoint-style `.experts` quant key 匹配。
+
+要求：
+
+- 映射必须限定在 `gemma4` / `gemma4_text`，不能做全局 `.experts` rewrite。
+- 只放宽已知的 Gemma4 `k_eq_v` 缺失 `v_proj` 场景，其它缺失 packed shard 继续报错。
+- 用单测覆盖缺失 `v_proj`、MoE expert prefix mapping、非 Gemma4 不受影响等场景。
+
+### 6.5 `ops/fused_moe/moe_mlp.py`
+
+职责：
+
+- 在 quantized MoE MLP 中按模型 activation 选择正确执行路径。
+- 为 Gemma4 `gelu_tanh` expert 提供 GELU 量化执行路径。
+- 保持 SwiGLU 系列模型的 fused quant 路径不变。
+
+要求：
+
+- GELU activation 不能进入 `npu_grouped_matmul_swiglu_quant`、`npu_dequant_swiglu_quant` 或 `npu_swiglu` 等 SwiGLU 专用路径。
+- W8A8/W4A8 int quant 和 W4A16 antiquant 需要分别覆盖 GELU 路径。
+- MC2、custom GMM SwiGLU、GMM SwiGLU quant fusion 等优化分支必须显式避开 GELU activation。
+
+### 6.6 `spec_decode/gemma4_proposer.py`
 
 职责：
 
@@ -458,7 +535,7 @@ MTP 的核心约束是：draft attention 的 K/V 来自 target cache，因此不
 - 尽量复用 vLLM 原生 `Gemma4Proposer`。
 - 不复制 upstream 已有逻辑。
 
-### 6.5 `ops/rotary_embedding.py`
+### 6.7 `ops/rotary_embedding.py`
 
 职责：
 
@@ -502,7 +579,16 @@ Gemma4 适配建议按以下层次验证。
 - logits top-k 与最终答案一致性验证。
 - eager 与 graph 精度对齐。
 
-### 7.5 MTP 验证
+### 7.5 量化验证
+
+- Gemma4 31B dense W8A8 启动与基础生成。
+- Gemma4 MoE W8A8 启动与基础生成。
+- `k_eq_v` layer 缺失 `v_proj` quant entry 时能正常加载。
+- MoE expert `.moe.experts` prefix 能匹配 checkpoint 中 `.experts` quant description。
+- GELU / `gelu_tanh` 量化 expert 不进入 SwiGLU 专用融合路径。
+- GPQA-D 等推理任务上，Gemma4 MoE W8A8 精度与预期基线对齐。
+
+### 7.6 MTP 验证
 
 - draft model 启动。
 - Q-only RoPE 输出 shape 与 dtype 一致。
