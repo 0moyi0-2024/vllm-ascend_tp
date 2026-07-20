@@ -75,6 +75,8 @@
   base: attention_common
   source_file_dependencies:
     - vllm_ascend/attention/attention_v1.py
+  tests:
+    - tests/e2e/pull_request/two_card/test_gemma4.py
 
 - name: attention_fa3
   optional: false
@@ -774,6 +776,7 @@ estimated_times:
   tests/e2e/pull_request/four_card/test_qwen3_5.py: 610
   tests/e2e/pull_request/four_card/test_qwen3_next.py: 1180
   tests/e2e/pull_request/four_card/test_graph_mode.py: 480
+  tests/e2e/pull_request/two_card/test_gemma4.py: 1200
   tests/ut/attention/a2/test_attention_cp.py: 40
   tests/ut/attention/a2/test_attention_cp_precision.py: 30
   tests/ut/attention/a2/test_attention_v1.py: 30
@@ -817,6 +820,8 @@ estimated_times:
 # for files whose name contains ``_310p``.
 # Patterns are evaluated longest first (most specific wins).
 runner_mapping:
+  tests/e2e/pull_request/two_card/test_gemma4.py:
+    default: a2_x2
   tests/e2e/pull_request/one_card:
     default: a2_x1
     310p: 310p_x1
@@ -839,6 +844,7 @@ partition:
   310p_x1: 1
   310p_x4: 1
   a2_x1: 5
+  a2_x2: 1
   a3_x2: 3
   a3_x4: 3
   cpu_x0: 1
