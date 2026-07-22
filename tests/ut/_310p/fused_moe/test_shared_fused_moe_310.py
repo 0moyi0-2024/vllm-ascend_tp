@@ -59,7 +59,7 @@ def test_runner_310_installs_specialized_unquantized_method_and_comm():
         parent_init.assert_called_once()
 
 
-def test_process_weights_after_loading_310_uses_version_specific_layout(
+def test_process_weights_after_loading_310_preserves_transposed_layout(
     monkeypatch,
 ):
     method = AscendUnquantizedFusedMoEMethod310.__new__(AscendUnquantizedFusedMoEMethod310)
@@ -79,8 +79,8 @@ def test_process_weights_after_loading_310_uses_version_specific_layout(
 
     torch.testing.assert_close(layer.w13_weight, original_w13.transpose(1, 2))
     torch.testing.assert_close(layer.w2_weight, original_w2.transpose(1, 2))
-    assert layer.w13_weight.is_contiguous() is True
-    assert layer.w2_weight.is_contiguous() is True
+    assert layer.w13_weight.is_contiguous() is False
+    assert layer.w2_weight.is_contiguous() is False
 
 
 class _Projection(nn.Module):
