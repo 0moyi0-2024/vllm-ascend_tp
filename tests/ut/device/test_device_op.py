@@ -6,6 +6,26 @@ import torch
 from vllm_ascend.device.device_op import A5DeviceAdaptor, BaseDeviceAdaptor
 
 
+def test_npu_moe_token_unpermute_preserves_routing_indices():
+    permuted_tokens = torch.randn(4, 8)
+    sorted_indices = torch.tensor([0, -1, 2, -3], dtype=torch.int32)
+    probs = torch.rand(4)
+    expected = torch.randn_like(permuted_tokens)
+
+    with mock.patch(
+        "vllm_ascend.device.device_op.torch_npu.npu_moe_token_unpermute",
+        return_value=expected,
+    ) as mock_unpermute:
+        output = BaseDeviceAdaptor.npu_moe_token_unpermute(permuted_tokens, sorted_indices, probs)
+
+    assert output is expected
+    mock_unpermute.assert_called_once_with(
+        permuted_tokens=permuted_tokens,
+        sorted_indices=sorted_indices,
+        probs=probs,
+    )
+
+
 def test_reshape_and_cache_makes_scatter_inputs_contiguous():
     key = torch.randn(2, 3, 4).transpose(0, 1)
     value = torch.randn(2, 3, 4).transpose(0, 1)

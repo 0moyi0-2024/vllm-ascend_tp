@@ -903,8 +903,10 @@ class BaseDeviceAdaptor:
 
     @staticmethod
     def npu_moe_token_unpermute(permuted_tokens, sorted_indices, probs):
+        # Preserve the indices produced by npu_moe_init_routing_v2; the two
+        # operators define a paired routing contract.
         return torch_npu.npu_moe_token_unpermute(
-            permuted_tokens=permuted_tokens, sorted_indices=torch.abs(sorted_indices), probs=probs
+            permuted_tokens=permuted_tokens, sorted_indices=sorted_indices, probs=probs
         )
 
     @staticmethod
