@@ -1,0 +1,1 @@
+pid 2959550's current affinity list: 0-191

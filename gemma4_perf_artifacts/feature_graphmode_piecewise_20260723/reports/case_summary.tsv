@@ -1,0 +1,15 @@
+case	status	func_ok	func_total	lat_mean_s	lat_max_s	config_evidence_lines	exitcode
+26B_async	OK	12	12	0.442	0.916	10	0
+26B_baseline	OK	12	12	0.466	0.897	9	0
+26B_chunked	OK	12	12	0.495	0.942	11	0
+26B_chunked_prefix	OK	12	12	0.448	0.83	11	0
+26B_cpubind	OK	12	12	0.413	0.762	12	0
+26B_prefix	OK	12	12	0.452	0.844	12	0
+26B_weightnz	OK	12	12	0.458	0.866	14	0
+31B_async	OK	12	12	0.702	1.507	10	0
+31B_baseline	OK	12	12	0.711	1.478	9	0
+31B_chunked	OK	12	12	0.725	1.505	11	0
+31B_chunked_prefix	OK	12	12	0.728	1.506	12	0
+31B_cpubind	OK	12	12	0.708	1.456	12	0
+31B_prefix	OK	12	12	0.722	1.484	12	0
+31B_weightnz	OK	12	12	0.747	1.547	14	0

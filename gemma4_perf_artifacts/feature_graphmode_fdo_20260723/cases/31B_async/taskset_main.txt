@@ -1,0 +1,1 @@
+pid 3012526's current affinity list: 0-191

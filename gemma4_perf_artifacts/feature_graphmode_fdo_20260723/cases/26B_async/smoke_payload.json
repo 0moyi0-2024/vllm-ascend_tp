@@ -1,0 +1,5 @@
+{
+  "model": "gemma-4-26B-A4B-it",
+  "messages": [{"role": "user", "content": "用一句话说明 vLLM 是什么。"}],
+  "max_tokens": 64, "temperature": 0
+}
