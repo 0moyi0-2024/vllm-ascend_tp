@@ -1,0 +1,11 @@
+===== ENGINE CONFIG (non-default args, feature-relevant) =====
+ 'max_model_len': 8192
+ 'enforce_eager': True
+ 'block_size': 128
+ 'enable_prefix_caching': False
+ 'enable_chunked_prefill': False
+ 'async_scheduling': True
+ 'additional_config': {'enable_cpu_binding': False
+ 'weight_nz_mode': 0}} [1430654
+===== FEATURE-SPECIFIC EVIDENCE =====
+[2026-07-11 10:17:57.453694][UC][I] non-default args: {'model_tag': '/home/xty/gemma4/26B', 'enable_auto_tool_choice': True, 'tool_call_parser': 'gemma4', 'host': '0.0.0.0', 'port': 9006, 'model': '/home/xty/gemma4/26B', 'max_model_len': 8192, 'enforce_eager': True, 'served_model_name': ['gemma-4-26B-A4B-it'], 'reasoning_parser': 'gemma4', 'tensor_parallel_size': 2, 'enable_expert_parallel': True, 'block_size': 128, 'enable_prefix_caching': False, 'limit_mm_per_prompt': {'image': 2, 'audio': 1, 'video': 1}, 'enable_chunked_prefill': False, 'async_scheduling': True, 'additional_config': {'enable_cpu_binding': False, 'weight_nz_mode': 0}} [1430654,1430654][api_utils.py:273,log_non_default_args]

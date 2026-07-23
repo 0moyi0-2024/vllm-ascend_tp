@@ -1,0 +1,16 @@
+===== ENGINE CONFIG (non-default args, feature-relevant) =====
+ 'max_model_len': 8192
+ 'enforce_eager': True
+ 'block_size': 128
+ 'enable_prefix_caching': True
+ 'enable_chunked_prefill': True
+ 'async_scheduling': False
+ 'additional_config': {'enable_cpu_binding': False
+ 'weight_nz_mode': 0}} [1423349
+===== FEATURE-SPECIFIC EVIDENCE =====
+[2026-07-11 10:12:11.694009][UC][I] Chunked prefill is enabled with max_num_batched_tokens=2048. [1423349,1423349][scheduler.py:239,__post_init__]
+[2026-07-11 10:16:31.592616][UC][I] Engine 000: Avg prompt throughput: 0.3 tokens/s, Avg generation throughput: 0.6 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.3%, Prefix cache hit rate: 0.0% [1423349,1423349][loggers.py:271,log]
+[2026-07-11 10:16:41.599921][UC][I] Engine 000: Avg prompt throughput: 9.2 tokens/s, Avg generation throughput: 3.6 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.3%, Prefix cache hit rate: 0.0% [1423349,1423349][loggers.py:271,log]
+[2026-07-11 10:16:51.600509][UC][I] Engine 000: Avg prompt throughput: 3.6 tokens/s, Avg generation throughput: 4.5 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.3%, Prefix cache hit rate: 0.0% [1423349,1423349][loggers.py:271,log]
+[2026-07-11 10:17:01.601181][UC][I] Engine 000: Avg prompt throughput: 5.1 tokens/s, Avg generation throughput: 4.1 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.3%, Prefix cache hit rate: 0.0% [1423349,1423349][loggers.py:271,log]
+[2026-07-11 10:17:11.600716][UC][I] Engine 000: Avg prompt throughput: 3.5 tokens/s, Avg generation throughput: 4.5 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.3%, Prefix cache hit rate: 0.0% [1423349,1423349][loggers.py:271,log]

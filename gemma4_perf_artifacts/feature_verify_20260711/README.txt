@@ -1,0 +1,2 @@
+OUT=/home/xty/gemma4_vllm_ascend_feature_verify_20260711_084432
+RUN_ID=20260711_084432
