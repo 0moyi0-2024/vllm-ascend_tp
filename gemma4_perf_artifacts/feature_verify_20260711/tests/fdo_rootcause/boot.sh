@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+cd /home/vllm-ascend_tp/vllm-ascend_tp
+# FULL_DECODE_ONLY + block-size 128 + max-model-len 8192 (the config that reached capture then failed)
+# Debug logging to get the full Python traceback at capture failure.
+ASCEND_RT_VISIBLE_DEVICES=0,1 HCCL_OP_EXPANSION_MODE=AIV HCCL_BUFFSIZE=256 \
+VLLM_LOGGING_LEVEL=DEBUG \
+vllm serve /home/xty/gemma4/31B \
+  --served-model-name gemma-4-31B-it --tensor-parallel-size 2 \
+  --enable-auto-tool-choice --tool-call-parser gemma4 --reasoning-parser gemma4 \
+  --limit-mm-per-prompt '{"image":2,"audio":1,"video":1}' \
+  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
+  --max-model-len 8192 --block-size 128 \
+  --no-enable-prefix-caching --no-enable-chunked-prefill --no-async-scheduling \
+  --additional-config '{"enable_cpu_binding": false, "weight_nz_mode": 0}' \
+  --host 0.0.0.0 --port 9000

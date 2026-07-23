@@ -1,0 +1,13 @@
+===== ENGINE CONFIG (non-default args, feature-relevant) =====
+ 'max_model_len': 8192
+ 'enforce_eager': True
+ 'block_size': 128
+ 'enable_prefix_caching': False
+ 'enable_chunked_prefill': False
+ 'async_scheduling': False
+ 'additional_config': {'enable_cpu_binding': True
+ 'weight_nz_mode': 0}} [1436966
+===== FEATURE-SPECIFIC EVIDENCE =====
+[2026-07-11 10:22:07.672291][UC][I] non-default args: {'model_tag': '/home/xty/gemma4/26B', 'enable_auto_tool_choice': True, 'tool_call_parser': 'gemma4', 'host': '0.0.0.0', 'port': 9000, 'model': '/home/xty/gemma4/26B', 'max_model_len': 8192, 'enforce_eager': True, 'served_model_name': ['gemma-4-26B-A4B-it'], 'reasoning_parser': 'gemma4', 'tensor_parallel_size': 2, 'enable_expert_parallel': True, 'block_size': 128, 'enable_prefix_caching': False, 'limit_mm_per_prompt': {'image': 2, 'audio': 1, 'video': 1}, 'enable_chunked_prefill': False, 'async_scheduling': False, 'additional_config': {'enable_cpu_binding': True, 'weight_nz_mode': 0}} [1436966,1436966][api_utils.py:273,log_non_default_args]
+(Worker_TP1_EP1 pid=1438315) INFO 07-11 10:24:33 [cpu_binding.py:542] [cpu_bind_mode] mode=topo_affinity rank=1 visible_npus=[0, 1]
+(Worker_TP0_EP0 pid=1438314) INFO 07-11 10:24:33 [cpu_binding.py:542] [cpu_bind_mode] mode=topo_affinity rank=0 visible_npus=[0, 1]

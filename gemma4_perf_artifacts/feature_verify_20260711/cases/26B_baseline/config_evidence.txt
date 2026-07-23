@@ -1,0 +1,10 @@
+===== ENGINE CONFIG (non-default args, feature-relevant) =====
+ 'max_model_len': 8192
+ 'enforce_eager': True
+ 'block_size': 128
+ 'enable_prefix_caching': False
+ 'enable_chunked_prefill': False
+ 'async_scheduling': False
+ 'additional_config': {'enable_cpu_binding': False
+ 'weight_nz_mode': 0}} [1423653
+===== FEATURE-SPECIFIC EVIDENCE =====
