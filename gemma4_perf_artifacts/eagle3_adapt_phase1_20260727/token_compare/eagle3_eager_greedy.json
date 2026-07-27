@@ -1,0 +1,94 @@
+[
+  [
+    {
+      "prompt": "What is the capital of France? Answer in one word.",
+      "text": "Paris",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 25,
+        "total_tokens": 27,
+        "completion_tokens": 2,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Count from 1 to 10.",
+      "text": "1, 2, 3, 4, 5, 6, 7, 8, 9, 10",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 22,
+        "total_tokens": 52,
+        "completion_tokens": 30,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Explain what machine learning is in one sentence.",
+      "text": "Machine learning is a branch of artificial intelligence that enables computers to learn patterns from data and make decisions or predictions without being explicitly programmed for every specific task.",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 22,
+        "total_tokens": 53,
+        "completion_tokens": 31,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Say hello in Spanish, French, and German.",
+      "text": "Spanish: Hola\nFrench: Bonjour\nGerman: Hallo",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 23,
+        "total_tokens": 35,
+        "completion_tokens": 12,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  [
+    {
+      "prompt": "What is the capital of France? Answer in one word.",
+      "text": "Paris",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 25,
+        "total_tokens": 27,
+        "completion_tokens": 2,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Count from 1 to 10.",
+      "text": "1, 2, 3, 4, 5, 6, 7, 8, 9, 10",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 22,
+        "total_tokens": 52,
+        "completion_tokens": 30,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Explain what machine learning is in one sentence.",
+      "text": "Machine learning is a branch of artificial intelligence that enables computers to learn patterns from data and make decisions or predictions without being explicitly programmed for every specific task.",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 22,
+        "total_tokens": 53,
+        "completion_tokens": 31,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Say hello in Spanish, French, and German.",
+      "text": "Spanish: Hola\nFrench: Bonjour\nGerman: Hallo",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 23,
+        "total_tokens": 35,
+        "completion_tokens": 12,
+        "prompt_tokens_details": null
+      }
+    }
+  ]
+]

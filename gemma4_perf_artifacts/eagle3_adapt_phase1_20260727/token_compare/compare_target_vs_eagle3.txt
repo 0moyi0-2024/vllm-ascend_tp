@@ -1,0 +1,7 @@
+=== Target-only (FDO) vs EAGLE3+PIECEWISE greedy token compare ===
+prompt 0: MATCH | 'What is the capital of France? Answer in'
+prompt 1: MATCH | 'Count from 1 to 10.'
+prompt 2: MATCH | 'Explain what machine learning is in one '
+prompt 3: MATCH | 'Say hello in Spanish, French, and German'
+
+OVERALL: ALL MATCH (greedy tokens identical)

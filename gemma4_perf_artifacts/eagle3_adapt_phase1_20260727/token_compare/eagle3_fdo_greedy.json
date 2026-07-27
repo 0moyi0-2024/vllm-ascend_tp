@@ -1,0 +1,94 @@
+[
+  [
+    {
+      "prompt": "What is the capital of France? Answer in one word.",
+      "text": "Paris",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 25,
+        "total_tokens": 27,
+        "completion_tokens": 2,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Count from 1 to 10.",
+      "text": "1, -2LentP2ed,Lented, laC_LentLented- [Wait,LentPLented, [Wait deC single] \n1, 2Lent laC l'ed- laC l small lB 1Lent",
+      "finish": "length",
+      "usage": {
+        "prompt_tokens": 22,
+        "total_tokens": 86,
+        "completion_tokens": 64,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Explain what machine learning is in one sentence.",
+      "text": "Machine learning не is a branch of lartificial intelligence that)\"); machine de machineL machine learningL machineP machine learning de machineL machine de machineL machine learning de machineL machineL machineP machineS machine learning de machineP machineP machineS machine single sentence:\n\nL machineS machineL machineL machine",
+      "finish": "length",
+      "usage": {
+        "prompt_tokens": 22,
+        "total_tokens": 86,
+        "completion_tokens": 64,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Say hello in Spanish, French, and German.",
+      "text": "Spanish: Hola\nFrench:z: Bonjour\ning: Hallo",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 23,
+        "total_tokens": 37,
+        "completion_tokens": 14,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  [
+    {
+      "prompt": "What is the capital of France? Answer in one word.",
+      "text": "Paris",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 25,
+        "total_tokens": 27,
+        "completion_tokens": 2,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Count from 1 to 10.",
+      "text": "1, 2 la, -3 same, la,C2L,L,P,L,S,L la, [Wait,C2L-3L,P,L-S,L_SL, la,L la,L la,LB] la,L la",
+      "finish": "length",
+      "usage": {
+        "prompt_tokens": 22,
+        "total_tokens": 86,
+        "completion_tokens": 64,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Explain what machine learning is in one sentence.",
+      "text": "Machine learning не is a branch of lartificial intelligence that)\"); machine de machineL machine learningL machineP machine/ machine learninged,L machine learningB machine learning de machineP machine/ machine learning de machineP machine de machineP machineP machineP machineed,P machine single-s sentence:\n\n**",
+      "finish": "length",
+      "usage": {
+        "prompt_tokens": 22,
+        "total_tokens": 86,
+        "completion_tokens": 64,
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "prompt": "Say hello in Spanish, French, and German.",
+      "text": "Spanish: Hola\nFrench:z DelBonjour\n la Bonjour\ning: Hallo",
+      "finish": "stop",
+      "usage": {
+        "prompt_tokens": 23,
+        "total_tokens": 40,
+        "completion_tokens": 17,
+        "prompt_tokens_details": null
+      }
+    }
+  ]
+]

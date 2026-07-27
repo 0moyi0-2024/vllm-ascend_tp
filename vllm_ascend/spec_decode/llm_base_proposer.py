@@ -364,6 +364,11 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
                 "Qwen3_5ForConditionalGeneration",
                 "Qwen3_5MoeForConditionalGeneration",
                 "Step3p7ForConditionalGeneration",
+                # Align with upstream vLLM: Gemma4 VL models use image_token_id
+                # (not image_token_index), so map it explicitly here. Without
+                # this the else-branch raises AttributeError on Gemma4Config.
+                "Gemma4ForConditionalGeneration",
+                "Gemma4UnifiedForConditionalGeneration",
             ]:
                 self.model.config.image_token_index = model.config.image_token_id
             elif self.get_model_name(model) == "PixtralForConditionalGeneration":
